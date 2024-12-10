@@ -241,12 +241,6 @@ export function newSpecialObject(kind: ObjectKind, p: NativeFunctionParams): All
             if (!isAwaited) {
 
                 const source = p.path.node.type === 'NewExpression' ? 'constructor' : 'thenable';
-                // const valueToAdd: [string, string, string] = [`${kind}Created`, t.toString(), source];
-                // if (p.solver.globalState.promiseRelatedOps.has(promiseId)) {
-                //     p.solver.globalState.promiseRelatedOps.get(promiseId)!.push(valueToAdd);
-                // }else {
-                //     p.solver.globalState.promiseRelatedOps.set(promiseId, [valueToAdd]);
-                // }
                 p.solver.globalState.promiseRelatedOps.addOperation(
                     promiseId,
                     `${kind}Created`,
@@ -601,12 +595,6 @@ export function invokeCallbackBound(kind: CallbackKind, p: NativeFunctionParams,
                 solver.addForAllTokensConstraint(vp.returnVar(ft.fun), key, p.path.node, (t: Token) => {
                     if (t instanceof AllocationSiteToken && t.kind === "Promise") {
                         const returnedPromiseId = solver.getNodeHash(t.allocSite).toString();
-                        // const valueToAdd: [string, string, string] = ["ReturnedByAnotherPromise", thenPromise.toString(), solver.getNodeHash(thenPromise.allocSite).toString()];
-                        // if (a.promiseRelatedOps.has(returnedPromiseId)) {
-                        //     a.promiseRelatedOps.get(returnedPromiseId)!.push(valueToAdd);
-                        // } else {
-                        //     a.promiseRelatedOps.set(returnedPromiseId, [valueToAdd]);
-                        // }
                         a.promiseRelatedOps.addOperation(
                             returnedPromiseId,
                             "ReturnedByAnotherPromise",
@@ -636,12 +624,6 @@ export function invokeCallbackBound(kind: CallbackKind, p: NativeFunctionParams,
             const promiseId = solver.getNodeHash(bt.allocSite).toString();
             const functionReturns = ft instanceof FunctionToken && hasReturnStatement(ft);
             const functionReceives = ft instanceof FunctionToken && hasParameters(ft);
-            // const valueToAdd: [string, string, string, string] = [kind, thenPromise.toString(), solver.getNodeHash(thenPromise.allocSite).toString(),functionReceives+"|"+functionReturns ];
-            // if (a.promiseRelatedOps.has(promiseId)) {
-            //     a.promiseRelatedOps.get(promiseId)!.push(valueToAdd);
-            // } else {
-            //     a.promiseRelatedOps.set(promiseId, [valueToAdd]);
-            // }
             a.promiseRelatedOps.addOperation(
                 promiseId,
                 kind,
@@ -836,13 +818,6 @@ export function callPromiseExecutor(p: NativeFunctionParams) {
                     newSpecialObject("PromiseReject", p),
                 ], undefined, false, p.path, {native: true});
 
-                // const valueToAdd: [string, string] = ["PromiseExecutorCalled", t.toString()];
-
-                // if ( p.solver.globalState.promiseRelatedOps.has(promiseId)) {
-                //     p.solver.globalState.promiseRelatedOps.get(promiseId)!.push(valueToAdd);
-                // }else {
-                //     p.solver.globalState.promiseRelatedOps.set(promiseId, [valueToAdd]);
-                // }
                 p.solver.globalState.promiseRelatedOps.addOperation(
                     promiseId,
                     "PromiseExecutorCalled",
@@ -861,13 +836,6 @@ export function callPromiseExecutor(p: NativeFunctionParams) {
  */
 export function callPromiseResolve(t: AllocationSiteToken, args: CallExpression["arguments"], path: NodePath, op: Operations) {
     const promiseId = op.solver.getNodeHash(t.allocSite).toString();
-    // const valueToAdd: [string, string] = [t.kind+"Called", t.toString()];
-
-    // if (op.solver.globalState.promiseRelatedOps.has(promiseId)) {
-    //     op.solver.globalState.promiseRelatedOps.get(promiseId)!.push(valueToAdd);
-    // }else {
-    //     op.solver.globalState.promiseRelatedOps.set(promiseId, [valueToAdd]);
-    // }
     op.solver.globalState.promiseRelatedOps.addOperation(
         promiseId,
         `${t.kind}Called`,
@@ -988,12 +956,6 @@ export function returnPromiseIterator(kind: "all" | "allSettled" | "any" | "race
                 if (t instanceof AllocationSiteToken && t.kind === "Promise") {
                     const promiseId = p.solver.getNodeHash(t.allocSite).toString();
                     const specialFunctionId = p.solver.getNodeHash(p.path.node).toString();
-                    // const valueToAdd: [string, string, string] = [`PassedToPromise.${kind}`, specialFunctionId, promise.toString()];
-                    // if (p.solver.globalState.promiseRelatedOps.has(promiseId)) {
-                    //     p.solver.globalState.promiseRelatedOps.get(promiseId)!.push(valueToAdd);
-                    // }else {
-                    //     p.solver.globalState.promiseRelatedOps.set(promiseId, [valueToAdd]);
-                    // }
                     p.solver.globalState.promiseRelatedOps.addOperation(
                         promiseId,
                         `PassedToPromise.${kind}`,

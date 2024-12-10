@@ -987,12 +987,6 @@ export class Operations {
     newPromiseToken(n: Node): AllocationSiteToken {
         const t = this.a.canonicalizeToken(new AllocationSiteToken("Promise", n));
         const promiseId = this.solver.getNodeHash(n).toString();
-        // const valueToAdd: [string, string] = [`PromiseCreated`, t.toString()];
-        // if (this.solver.globalState.promiseRelatedOps.has(promiseId)) {
-        //     this.solver.globalState.promiseRelatedOps.get(promiseId)!.push(valueToAdd);
-        // }else {
-        //     this.solver.globalState.promiseRelatedOps.set(promiseId, [valueToAdd]);
-        // }
         this.solver.globalState.promiseRelatedOps.addOperation(
             promiseId,
             `PromiseCreated`,
@@ -1013,12 +1007,6 @@ export class Operations {
         this.solver.addForAllTokensConstraint(arg, TokenListener.AWAIT, node, (t: Token) => {
             if (t instanceof AllocationSiteToken && t.kind === "Promise"){
                 const promiseId = this.solver.getNodeHash(t.allocSite).toString();
-                // const valueToAdd: [string, string] = [`PromiseAwaited`, t.toString()];
-                // if (this.solver.globalState.promiseRelatedOps.has(promiseId)) {
-                //     this.solver.globalState.promiseRelatedOps.get(promiseId)!.push(valueToAdd);
-                // }else{
-                //     this.solver.globalState.promiseRelatedOps.set(promiseId, [valueToAdd]);
-                // }
                 this.solver.globalState.promiseRelatedOps.addOperation(
                     promiseId,
                     `PromiseAwaited`,
@@ -1035,12 +1023,6 @@ export class Operations {
                 for (const token of tokens) {
                     if (token instanceof AllocationSiteToken && token.kind === "Promise") {
                             const returnedPromiseId = this.solver.getNodeHash(token.allocSite).toString();
-                            // const valueToAdd: [string, string, string] = ["ReturnedByAnotherPromise", t.toString(), this.solver.getNodeHash(t.allocSite).toString()];
-                            // if ( this.solver.globalState.promiseRelatedOps.has(returnedPromiseId)) {
-                            //     this.solver.globalState.promiseRelatedOps.get(returnedPromiseId)!.push(valueToAdd);
-                            // } else {
-                            //     this.solver.globalState.promiseRelatedOps.set(returnedPromiseId, [valueToAdd]);
-                            // }
                             this.solver.globalState.promiseRelatedOps.addOperation(
                                 returnedPromiseId,
                                 `ReturnedByAnotherPromise`,

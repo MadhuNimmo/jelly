@@ -171,7 +171,6 @@ export class GlobalState {
      * Promise related operations.
      * Used by async flag.
      */
-    //promiseRelatedOps: Map<string, Array<[string, string, string?, string?]>> = new Map();
     readonly promiseRelatedOps:PromiseTracker = new PromiseTracker();
 
     /**
