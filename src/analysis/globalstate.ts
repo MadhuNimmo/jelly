@@ -26,6 +26,7 @@ import {ProcessManager} from "../approx/processmanager";
 import {Patching} from "../approx/patching";
 import {isDummyConstructor} from "../parsing/extras";
 import {getEnclosingFunction} from "../misc/asthelpers";
+import { PromiseTracker } from './promiseTracker';
 
 /**
  * Global analysis state.
@@ -165,6 +166,13 @@ export class GlobalState {
     approx: ProcessManager | undefined;
 
     patching: Patching | undefined;
+
+    /**
+     * Promise related operations.
+     * Used by async flag.
+     */
+    //promiseRelatedOps: Map<string, Array<[string, string, string?, string?]>> = new Map();
+    readonly promiseRelatedOps:PromiseTracker = new PromiseTracker();
 
     /**
      * Returns the canonical representative of the given constraint variable (possibly the given one).

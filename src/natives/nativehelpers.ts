@@ -41,6 +41,46 @@ import {Operations} from "../analysis/operations";
 import {AccessorType, ConstraintVar, IntermediateVar, isObjectPropertyVarObj, ObjectPropertyVarObj} from "../analysis/constraintvars";
 import {UnknownAccessPath} from "../analysis/accesspaths";
 
+function hasParameters(functionToken: FunctionToken): boolean {
+    const fun = functionToken.fun;
+
+    // Check if params array exists and has any entries
+    return Array.isArray(fun.params) && fun.params.length > 0;
+}
+
+function hasReturnStatement(functionToken: FunctionToken): boolean {
+    const fun = functionToken.fun;
+
+    // For arrow functions with expression bodies (implicit return)
+    if (fun.type === 'ArrowFunctionExpression' && fun.body.type !== 'BlockStatement') {
+        return true; // Expression body is automatically returned
+    }
+
+    // For functions with block bodies
+    if ('body' in fun.body && Array.isArray(fun.body.body)) {
+        const statements = fun.body.body;
+
+        function isReturnStatement(node: { type: string }): boolean {
+            return node.type === 'ReturnStatement';
+        }
+
+        return statements.some((statement: { type: string, consequent?: any, alternate?: any }) => {
+            if (isReturnStatement(statement)) {
+                return true;
+            }
+
+            if (statement.type === 'IfStatement') {
+                return isReturnStatement(statement.consequent) ||
+                       (statement.alternate && isReturnStatement(statement.alternate));
+            }
+
+            return false;
+        });
+    }
+
+    return false;
+}
+
 /**
  * Models an assignment from a function parameter (0-based indexing) to a property of the base object.
  */
@@ -192,6 +232,32 @@ export function newObject(p: NativeFunctionParams): ObjectToken | PackageObjectT
  */
 export function newSpecialObject(kind: ObjectKind, p: NativeFunctionParams): AllocationSiteToken {
     const t = p.solver.globalState.canonicalizeToken(new AllocationSiteToken(kind, p.path.node));
+
+    if (kind.startsWith("Promise")){
+        const promiseId = p.solver.getNodeHash(p.path.node).toString();
+        if(kind==="Promise"){
+            const isAwaited = p.path.findParent((path) => path.node.type === 'AwaitExpression') !== null;
+
+            if (!isAwaited) {
+
+                const source = p.path.node.type === 'NewExpression' ? 'constructor' : 'thenable';
+                // const valueToAdd: [string, string, string] = [`${kind}Created`, t.toString(), source];
+                // if (p.solver.globalState.promiseRelatedOps.has(promiseId)) {
+                //     p.solver.globalState.promiseRelatedOps.get(promiseId)!.push(valueToAdd);
+                // }else {
+                //     p.solver.globalState.promiseRelatedOps.set(promiseId, [valueToAdd]);
+                // }
+                p.solver.globalState.promiseRelatedOps.addOperation(
+                    promiseId,
+                    `${kind}Created`,
+                    t.toString(),
+                    null,
+                    null,
+                    source
+                );
+            }
+        }
+    }
     p.solver.globalState.patching?.registerAllocationSite(t);
     return t;
 }
@@ -367,6 +433,11 @@ export function invokeCallback(kind: CallbackKind, p: NativeFunctionParams, arg:
         if (isExpression(funarg)) { // TODO: SpreadElement? non-MemberExpression?
             const funVar = p.solver.varProducer.expVar(funarg, p.path);
             p.solver.addForAllTokensConstraint(funVar, key, {n: funarg, t: bt, s: kind}, (ft: Token) => {
+                if (ft instanceof AllocationSiteToken && (ft.kind === "PromiseResolve" || ft.kind === "PromiseReject")) {
+                    // Handle resolve/reject function passed as a callback
+                    callPromiseResolve(ft, p.path.node.arguments, p.path, p.op);
+                }
+
                 if (!(ft instanceof FunctionToken || ft instanceof AccessPathToken))
                     return; // TODO: ignoring native functions etc.
 
@@ -529,6 +600,21 @@ export function invokeCallbackBound(kind: CallbackKind, p: NativeFunctionParams,
                 // for all return values of the callback...
                 solver.addForAllTokensConstraint(vp.returnVar(ft.fun), key, p.path.node, (t: Token) => {
                     if (t instanceof AllocationSiteToken && t.kind === "Promise") {
+                        const returnedPromiseId = solver.getNodeHash(t.allocSite).toString();
+                        // const valueToAdd: [string, string, string] = ["ReturnedByAnotherPromise", thenPromise.toString(), solver.getNodeHash(thenPromise.allocSite).toString()];
+                        // if (a.promiseRelatedOps.has(returnedPromiseId)) {
+                        //     a.promiseRelatedOps.get(returnedPromiseId)!.push(valueToAdd);
+                        // } else {
+                        //     a.promiseRelatedOps.set(returnedPromiseId, [valueToAdd]);
+                        // }
+                        a.promiseRelatedOps.addOperation(
+                            returnedPromiseId,
+                            "ReturnedByAnotherPromise",
+                            thenPromise.toString(),
+                            solver.getNodeHash(thenPromise.allocSite).toString(),
+                            null,
+                            null
+                        );
                         // when callback return value is a promise, transfer its values to the new promise
                         if (kind !== "Promise.prototype.finally$onFinally")
                             solver.addSubsetConstraint(solver.varProducer.objPropVar(t, PROMISE_FULFILLED_VALUES), solver.varProducer.objPropVar(thenPromise, PROMISE_FULFILLED_VALUES));
@@ -547,6 +633,23 @@ export function invokeCallbackBound(kind: CallbackKind, p: NativeFunctionParams,
                 solver.addSubsetConstraint(vp.objPropVar(bt, PROMISE_FULFILLED_VALUES), vp.objPropVar(thenPromise, PROMISE_FULFILLED_VALUES));
                 solver.addSubsetConstraint(vp.objPropVar(bt, PROMISE_REJECTED_VALUES), vp.objPropVar(thenPromise, PROMISE_REJECTED_VALUES));
             }
+            const promiseId = solver.getNodeHash(bt.allocSite).toString();
+            const functionReturns = ft instanceof FunctionToken && hasReturnStatement(ft);
+            const functionReceives = ft instanceof FunctionToken && hasParameters(ft);
+            // const valueToAdd: [string, string, string, string] = [kind, thenPromise.toString(), solver.getNodeHash(thenPromise.allocSite).toString(),functionReceives+"|"+functionReturns ];
+            // if (a.promiseRelatedOps.has(promiseId)) {
+            //     a.promiseRelatedOps.get(promiseId)!.push(valueToAdd);
+            // } else {
+            //     a.promiseRelatedOps.set(promiseId, [valueToAdd]);
+            // }
+            a.promiseRelatedOps.addOperation(
+                promiseId,
+                kind,
+                thenPromise.toString(),
+                solver.getNodeHash(thenPromise.allocSite).toString(),
+                { pars: functionReceives, rets: functionReturns },
+                null
+            );
             // TODO: should use identity function for onFulfilled/onRejected in general if funVar is a non-function value
             // return the new promise
             returnToken(thenPromise, p);
@@ -725,12 +828,30 @@ export function callPromiseExecutor(p: NativeFunctionParams) {
     if (args.length >= 1 && isExpression(args[0])) { // TODO: SpreadElement? non-MemberExpression?
         const funVar = p.solver.varProducer.expVar(args[0], p.path);
         const caller = p.solver.globalState.getEnclosingFunctionOrModule(p.path, p.moduleInfo);
+        const promiseId = p.solver.getNodeHash(p.path.node).toString();
         p.solver.addForAllTokensConstraint(funVar, TokenListener.CALL_PROMISE_EXECUTOR, p.path.node, (t: Token) => {
-            if (t instanceof FunctionToken)
+            if (t instanceof FunctionToken){
                 p.op.callFunctionTokenBound(t, undefined, caller, [
                     newSpecialObject("PromiseResolve", p),
                     newSpecialObject("PromiseReject", p),
                 ], undefined, false, p.path, {native: true});
+
+                // const valueToAdd: [string, string] = ["PromiseExecutorCalled", t.toString()];
+
+                // if ( p.solver.globalState.promiseRelatedOps.has(promiseId)) {
+                //     p.solver.globalState.promiseRelatedOps.get(promiseId)!.push(valueToAdd);
+                // }else {
+                //     p.solver.globalState.promiseRelatedOps.set(promiseId, [valueToAdd]);
+                // }
+                p.solver.globalState.promiseRelatedOps.addOperation(
+                    promiseId,
+                    "PromiseExecutorCalled",
+                    t.toString(),
+                    null,
+                    null,
+                    null
+                );
+            }
         });
     }
 }
@@ -739,6 +860,22 @@ export function callPromiseExecutor(p: NativeFunctionParams) {
  * Models call to a promise resolve or reject function.
  */
 export function callPromiseResolve(t: AllocationSiteToken, args: CallExpression["arguments"], path: NodePath, op: Operations) {
+    const promiseId = op.solver.getNodeHash(t.allocSite).toString();
+    // const valueToAdd: [string, string] = [t.kind+"Called", t.toString()];
+
+    // if (op.solver.globalState.promiseRelatedOps.has(promiseId)) {
+    //     op.solver.globalState.promiseRelatedOps.get(promiseId)!.push(valueToAdd);
+    // }else {
+    //     op.solver.globalState.promiseRelatedOps.set(promiseId, [valueToAdd]);
+    // }
+    op.solver.globalState.promiseRelatedOps.addOperation(
+        promiseId,
+        `${t.kind}Called`,
+        t.toString(),
+        null,
+        null,
+        null
+    );
     if (args.length >= 1 && isExpression(args[0])) { // TODO: non-Expression?
         const arg = op.expVar(args[0], path);
         if (arg) {
@@ -848,6 +985,24 @@ export function returnPromiseIterator(kind: "all" | "allSettled" | "any" | "race
             }
             p.solver.addForAllTokensConstraint(tmp, key, p.path.node, (t: Token) => {
                 const vp = p.solver.varProducer;
+                if (t instanceof AllocationSiteToken && t.kind === "Promise") {
+                    const promiseId = p.solver.getNodeHash(t.allocSite).toString();
+                    const specialFunctionId = p.solver.getNodeHash(p.path.node).toString();
+                    // const valueToAdd: [string, string, string] = [`PassedToPromise.${kind}`, specialFunctionId, promise.toString()];
+                    // if (p.solver.globalState.promiseRelatedOps.has(promiseId)) {
+                    //     p.solver.globalState.promiseRelatedOps.get(promiseId)!.push(valueToAdd);
+                    // }else {
+                    //     p.solver.globalState.promiseRelatedOps.set(promiseId, [valueToAdd]);
+                    // }
+                    p.solver.globalState.promiseRelatedOps.addOperation(
+                        promiseId,
+                        `PassedToPromise.${kind}`,
+                        specialFunctionId,
+                        promise.toString(),
+                        null,
+                        null
+                    );
+                }
                 switch (kind) {
                     case "all":
                         if (t instanceof AllocationSiteToken && t.kind === "Promise") {

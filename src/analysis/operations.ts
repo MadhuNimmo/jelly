@@ -985,7 +985,23 @@ export class Operations {
      * Creates a AllocationSiteToken of kind Promise.
      */
     newPromiseToken(n: Node): AllocationSiteToken {
-        return this.a.canonicalizeToken(new AllocationSiteToken("Promise", n));
+        const t = this.a.canonicalizeToken(new AllocationSiteToken("Promise", n));
+        const promiseId = this.solver.getNodeHash(n).toString();
+        // const valueToAdd: [string, string] = [`PromiseCreated`, t.toString()];
+        // if (this.solver.globalState.promiseRelatedOps.has(promiseId)) {
+        //     this.solver.globalState.promiseRelatedOps.get(promiseId)!.push(valueToAdd);
+        // }else {
+        //     this.solver.globalState.promiseRelatedOps.set(promiseId, [valueToAdd]);
+        // }
+        this.solver.globalState.promiseRelatedOps.addOperation(
+            promiseId,
+            `PromiseCreated`,
+            t.toString(),
+            null,
+            null,
+            null
+        );
+        return t;
     }
 
     /**
@@ -995,10 +1011,49 @@ export class Operations {
         if (!arg || !res)
             return;
         this.solver.addForAllTokensConstraint(arg, TokenListener.AWAIT, node, (t: Token) => {
-            if (t instanceof AllocationSiteToken && t.kind === "Promise")
+            if (t instanceof AllocationSiteToken && t.kind === "Promise"){
+                const promiseId = this.solver.getNodeHash(t.allocSite).toString();
+                // const valueToAdd: [string, string] = [`PromiseAwaited`, t.toString()];
+                // if (this.solver.globalState.promiseRelatedOps.has(promiseId)) {
+                //     this.solver.globalState.promiseRelatedOps.get(promiseId)!.push(valueToAdd);
+                // }else{
+                //     this.solver.globalState.promiseRelatedOps.set(promiseId, [valueToAdd]);
+                // }
+                this.solver.globalState.promiseRelatedOps.addOperation(
+                    promiseId,
+                    `PromiseAwaited`,
+                    t.toString(),
+                    null,
+                    null,
+                    null
+                );
                 this.solver.addSubsetConstraint(this.solver.varProducer.objPropVar(t, PROMISE_FULFILLED_VALUES), res);
-            else
+
+                const fulfilledValVar = this.solver.varProducer.objPropVar(t, PROMISE_FULFILLED_VALUES);
+                const rep = this.solver.fragmentState.getRepresentative(fulfilledValVar);
+                const tokens = Array.from(this.solver.fragmentState.getTokens(rep));
+                for (const token of tokens) {
+                    if (token instanceof AllocationSiteToken && token.kind === "Promise") {
+                            const returnedPromiseId = this.solver.getNodeHash(token.allocSite).toString();
+                            // const valueToAdd: [string, string, string] = ["ReturnedByAnotherPromise", t.toString(), this.solver.getNodeHash(t.allocSite).toString()];
+                            // if ( this.solver.globalState.promiseRelatedOps.has(returnedPromiseId)) {
+                            //     this.solver.globalState.promiseRelatedOps.get(returnedPromiseId)!.push(valueToAdd);
+                            // } else {
+                            //     this.solver.globalState.promiseRelatedOps.set(returnedPromiseId, [valueToAdd]);
+                            // }
+                            this.solver.globalState.promiseRelatedOps.addOperation(
+                                returnedPromiseId,
+                                `ReturnedByAnotherPromise`,
+                                t.toString(),
+                                this.solver.getNodeHash(t.allocSite).toString(),
+                                null,
+                                null
+                            );
+                        } 
+                    }
+            }else{
                 this.solver.addTokenConstraint(t, res);
+            }
         });
     }
 }

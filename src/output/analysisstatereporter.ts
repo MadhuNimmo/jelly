@@ -582,4 +582,12 @@ export class AnalysisStateReporter {
             logger.info(`${k}: ${n} (${withListenersCounts.get(k) ?? 0}, ${srcCounts.get(k) ?? 0}, ${dstCounts.get(k) ?? 0})`);
         logger.info(`Total: ${this.f.vars.size} (${varsWithListeners.size})`);
     }
+
+    /**
+     * Reports the promise related operations.
+     */
+    reportPromiseOperations() {
+        return this.a.promiseRelatedOps.reportOperations();
+    }
+
 }

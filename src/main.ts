@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import {analyzeFiles} from "./analysis/analyzer";
-import {closeSync, openSync, readdirSync, readFileSync, unlinkSync} from "fs";
+import {closeSync, openSync, readdirSync, readFileSync, unlinkSync, writeSync} from "fs";
 import {program} from "commander";
 import logger, {logToFile, setLogLevel} from "./misc/logger";
 import {COPYRIGHT, options, PKG, setDefaultTrackedModules, setOptions, setPatternProperties, VERSION} from "./options";
@@ -107,6 +107,7 @@ program
     .option("--obj-spread", "enable model of spread syntax for object literals ({...obj})")
     .option("--native-overwrites", "allow overwriting of native object properties")
     .option("--ignore-imprecise-native-calls", "ignore imprecise native calls")
+    .option("--async <file>", "capture async behavior")
     .usage("[options] [files]")
     .addHelpText("after",
         "\nAll modules reachable by require/import from the given files are included in the analysis\n" +
@@ -385,6 +386,34 @@ async function main() {
 
             if (options.variableKinds)
                 out.reportVariableKinds();
+
+            // if (options.async){
+            //     const file = options.async;
+
+            //     // Get the output from reportPromiseOperations
+            //     const reportOutput = JSON.stringify(Array.from(out.reportPromiseOperations().entries()), null, 2);
+
+
+            //     const fd = openSync(file, "w");
+            //     writeSync(fd,reportOutput);
+            //     closeSync(fd);
+            //     logger.info(`Promise operations written to ${file}`);
+            // }
+            if (options.async) {
+                const file = options.async;
+                const operationsObject = out.reportPromiseOperations();
+                // Get the output from promiseTracker
+                const reportOutput = JSON.stringify(
+                   operationsObject, 
+                    null, 
+                    2
+                );
+                
+                const fd = openSync(file, "w");
+                writeSync(fd, reportOutput);
+                closeSync(fd);
+                logger.info(`Promise operations written to ${file}`);
+            }
         }
     }
 }
