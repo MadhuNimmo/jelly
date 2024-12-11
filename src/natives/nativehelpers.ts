@@ -959,8 +959,8 @@ export function returnPromiseIterator(kind: "all" | "allSettled" | "any" | "race
                     p.solver.globalState.promiseRelatedOps.addOperation(
                         promiseId,
                         `PassedToPromise.${kind}`,
-                        specialFunctionId,
                         promise.toString(),
+                        specialFunctionId,
                         null,
                         null
                     );
