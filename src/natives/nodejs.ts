@@ -1,6 +1,6 @@
 import {NativeFunctionParams, NativeModel, NativeModelParams} from "./nativebuilder";
 import {NativeObjectToken} from "../analysis/tokens";
-import {invokeCallback} from "./nativehelpers";
+import {invokeCallback,returnToken,newSpecialObject} from "./nativehelpers";
 
 /*
  * Models of Node.js standard built-in objects.
@@ -63,6 +63,26 @@ export const nodejsModels: NativeModel = {
         },
         {
             name: "clearImmediate"
+        },
+        {
+            name: "fetch",
+            invoke: (p: NativeFunctionParams) => {
+                // Create a new Promise to represent the fetch call
+                const fetchPromise = newSpecialObject("Promise", p);
+                // Add operation to promiseChain
+                const promiseId = p.solver.getNodeHash(p.path.node).toString();
+                p.solver.globalState.promiseRelatedOps.addOperation(
+                    promiseId,
+                    "PromiseCreated",
+                    fetchPromise.toString(),
+                    null,
+                    null,
+                    "fetch"  // source indicating this Promise came from fetch
+                );
+
+                // Return the Promise
+                returnToken(fetchPromise, p);
+            }
         },
         {
             name: "clearInterval"
