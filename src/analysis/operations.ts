@@ -62,6 +62,7 @@ import {TokenListener} from "./listeners";
 import micromatch from "micromatch";
 import {callPromiseResolve} from "../natives/nativehelpers";
 import Module from "module";
+import {constraintVarToStringWithCode} from "../output/tostringwithcode";
 
 /**
  * Models of core JavaScript operations used by astvisitor and nativehelpers.
@@ -417,8 +418,22 @@ export class Operations {
                 addInclusionConstraint(base, vp.thisVar(t.fun));
         }
         // constraint: ...: ⟦ret_t⟧ ⊆ ⟦(new) E0(E1,...,En)⟧
-        if (!isParentExpressionStatement(pars))
+        //if (!isParentExpressionStatement(pars))
             this.solver.addSubsetConstraint(vp.returnVar(t.fun), resultVar);
+        const functionId = this.solver.getNodeHash(t.fun).toString();
+        if ( this.solver.globalState.promiseRelatedOps.hasPromiseReturningFunction(functionId) && resultVar) {
+            const resultVarString = constraintVarToStringWithCode(resultVar);
+            const callSiteId = this.solver.getNodeHash(path.node).toString();
+
+            this.solver.globalState.promiseRelatedOps.addOperation(
+                functionId,
+                "FunctionCalled",
+                resultVarString,
+                null,
+                null,
+                callSiteId
+            )
+        }
     }
 
     /**

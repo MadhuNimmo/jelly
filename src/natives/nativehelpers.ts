@@ -40,6 +40,7 @@ import {NodePath} from "@babel/traverse";
 import {Operations} from "../analysis/operations";
 import {AccessorType, ConstraintVar, IntermediateVar, isObjectPropertyVarObj, ObjectPropertyVarObj} from "../analysis/constraintvars";
 import {UnknownAccessPath} from "../analysis/accesspaths";
+import { constraintVarToStringWithCode } from "../output/tostringwithcode";
 
 function hasParameters(functionToken: FunctionToken): boolean {
     const fun = functionToken.fun;
@@ -79,6 +80,30 @@ function hasReturnStatement(functionToken: FunctionToken): boolean {
     }
 
     return false;
+}
+
+//type BaseCallOrVar = CallExpression | Identifier | MemberExpression;
+
+function getBasePromise(node : any) {
+    // If no callee, return the node itself
+    if (!node.callee) return node;
+    
+    if (node.callee.type === 'MemberExpression') {
+        // For chains like somePromise.then() or obj.somePromise.then()
+        let currentObject = node.callee.object;
+        
+        // Keep going up the chain while we find member expressions
+        // (like in a.then().catch().then())
+        while (currentObject.type === 'CallExpression' && 
+               currentObject.callee.type === 'MemberExpression') {
+            currentObject = currentObject.callee.object;
+        }
+
+        return currentObject;
+    }
+    
+    // For direct calls without member expressions
+    return node.callee;
 }
 
 /**
@@ -286,6 +311,26 @@ export function addInherits(t: ObjectPropertyVarObj, proto: Expression, p: Nativ
  */
 export function returnToken(t: Token, p: NativeFunctionParams) {
     p.solver.addTokenConstraint(t, p.solver.varProducer.expVar(p.path.node, p.path));
+
+    if (t instanceof AllocationSiteToken && t.kind === "Promise") {
+        const promiseId = p.solver.getNodeHash(t.allocSite).toString();
+        const functionNode = p.path.scope.block;
+        const functionId = p.solver.getNodeHash(functionNode).toString();
+        const basePromise = getBasePromise(p.path.node);
+        // Track that this promise is being returned from this function
+        //Needs a fix: Separate identities : Retuned by function vs associated with function call
+        if(basePromise.type==='CallExpression' || (basePromise.type==='Identifier' && basePromise.name!='Promise') || p.path.parent.type==='ReturnStatement'){
+            p.solver.globalState.promiseRelatedOps.addOperation(
+                promiseId,
+                "ReturnedFromFunction",
+                constraintVarToStringWithCode(p.solver.varProducer.nodeVar(p.path.node)),
+                p.solver.getNodeHash(p.path.node).toString(), // The return statement
+                null,
+                functionId
+            );
+        }
+        p.solver.globalState.promiseRelatedOps.addPromiseReturningFunction(functionId)
+    }
 }
 
 /**
@@ -624,13 +669,20 @@ export function invokeCallbackBound(kind: CallbackKind, p: NativeFunctionParams,
             const promiseId = solver.getNodeHash(bt.allocSite).toString();
             const functionReturns = ft instanceof FunctionToken && hasReturnStatement(ft);
             const functionReceives = ft instanceof FunctionToken && hasParameters(ft);
+            let callSiteId = null;
+            if(p.path.node.callee.type === 'MemberExpression'){
+                const objectNode = p.path.node.callee.object;
+                if (objectNode.type === "CallExpression") {
+                    callSiteId = solver.getNodeHash(objectNode).toString()
+                }
+            }
             a.promiseRelatedOps.addOperation(
                 promiseId,
                 kind,
                 thenPromise.toString(),
                 solver.getNodeHash(thenPromise.allocSite).toString(),
                 { pars: functionReceives, rets: functionReturns },
-                null
+                callSiteId
             );
             // TODO: should use identity function for onFulfilled/onRejected in general if funVar is a non-function value
             // return the new promise
