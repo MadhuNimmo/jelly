@@ -335,7 +335,7 @@ export default class Solver {
     /**
      * Provides a unique'ish ID for the given node.
      */
-    private getNodeHash(n: Node): bigint {
+    public getNodeHash(n: Node): bigint {
         const nid = (n as any)[JELLY_NODE_ID];
         assert(nid !== undefined);
         let id = (BigInt(nid) << 32n);

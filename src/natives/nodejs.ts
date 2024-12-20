@@ -64,6 +64,15 @@ export const nodejsModels: NativeModel = {
         {
             name: "clearImmediate"
         },
+        // {
+        //     name: "fetch",
+        //     invoke: (p: NativeFunctionParams) => {
+        //         // Create a new Promise to represent the fetch call
+        //         const fetchPromise = newSpecialObject("Promise", p);
+        //         // Return the Promise
+        //         returnToken(fetchPromise, p);
+        //     }
+        // },
         {
             name: "clearInterval"
         },
