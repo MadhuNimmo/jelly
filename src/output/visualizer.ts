@@ -8,6 +8,7 @@ import {isIdentifier} from "@babel/types";
 import {VulnerabilityResults} from "../patternmatching/vulnerabilitydetector";
 import {getVulnerabilityId, Vulnerability} from "../typings/vulnerabilities";
 import {constraintVarToStringWithCode, funcToStringWithCode} from "./tostringwithcode";
+import {sep} from "path";
 
 export interface VisualizerGraphs {
     graphs: Array<{

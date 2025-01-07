@@ -127,7 +127,7 @@ function isPromiseCreation(node: any): boolean {
 function getNodeType(node: any): 'creation' | 'assignment' | 'operation' {
         if (isPromiseCreation(node)) {
                 return 'creation';
-        } else if (node.type === "AssignmentExpression" || node.type === "VariableDeclarator") {
+        } else if (node.type === "Identifier") {
                 return 'assignment';
         } else {
                 return 'operation';
