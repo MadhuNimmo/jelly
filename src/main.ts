@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import {analyzeFiles} from "./analysis/analyzer";
-import {closeSync, openSync, readdirSync, readFileSync, unlinkSync, writeFileSync} from "fs";
+import {closeSync, openSync, readdirSync, readFileSync, unlinkSync} from "fs";
 import {program} from "commander";
 import logger, {logToFile, setLogLevel} from "./misc/logger";
 import {COPYRIGHT, options, PKG, setDefaultTrackedModules, setOptions, setPatternProperties, VERSION} from "./options";
@@ -31,7 +31,7 @@ import {getAPIExported, reportAccessPaths, reportAPIExportedFunctions} from "./p
 import {merge} from "./output/merge";
 import {CallGraph} from "./typings/callgraph";
 import {ProcessManager} from "./approx/processmanager";
-import { getPromiseDataFlows } from './output/promiseOperations';
+import { extractAndWritePromiseFragments } from './output/promiseOperations';
 
 program
     .name("jelly")
@@ -390,9 +390,22 @@ async function main() {
 
             if (options.async) {
                 const file = options.async;
-                const promiseFlows = getPromiseDataFlows(f);
-                writeFileSync(file, JSON.stringify(Object.fromEntries(promiseFlows), null, 2));
-                logger.info(`Call graph written to ${file}`);
+            
+                try {
+                    // Read and parse the JavaScript source file into an AST
+                    const sourceCode = readFileSync(file, "utf-8");
+                    const ast: File = parse(sourceCode, {
+                        sourceType: "module",
+                        plugins: ["jsx", "typescript"] // Adjust plugins based on your project
+                    });
+            
+                    // Ensure `globalState` is initialized somewhere earlier
+                    const result = extractAndWritePromiseFragments(f, globalState, ast, file);
+            
+                    logger.info(`✅ Async analysis written to ${file}. Found ${result.promiseCount} promises.`);
+                } catch (error) {
+                    logger.error(`❌ Error processing async analysis for ${file}: ${error.message}`);
+                }
             }
         }
     }
