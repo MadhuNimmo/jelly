@@ -230,3 +230,5 @@ export class ReadResultVar extends ConstraintVar {
         return getTokenParent(this.t);
     }
 }
+
+export { Node };

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import {analyzeFiles} from "./analysis/analyzer";
-import {closeSync, openSync, readdirSync, readFileSync, unlinkSync} from "fs";
+import {closeSync, openSync, readdirSync, readFileSync, unlinkSync, writeFileSync} from "fs";
 import {program} from "commander";
 import logger, {logToFile, setLogLevel} from "./misc/logger";
 import {COPYRIGHT, options, PKG, setDefaultTrackedModules, setOptions, setPatternProperties, VERSION} from "./options";
@@ -31,6 +31,7 @@ import {getAPIExported, reportAccessPaths, reportAPIExportedFunctions} from "./p
 import {merge} from "./output/merge";
 import {CallGraph} from "./typings/callgraph";
 import {ProcessManager} from "./approx/processmanager";
+import { getPromiseAliases } from './output/promiseOperations';
 
 program
     .name("jelly")
@@ -107,6 +108,7 @@ program
     .option("--obj-spread", "enable model of spread syntax for object literals ({...obj})")
     .option("--native-overwrites", "allow overwriting of native object properties")
     .option("--ignore-imprecise-native-calls", "ignore imprecise native calls")
+    .option("--async <file>", "capture async behavior")
     .usage("[options] [files]")
     .addHelpText("after",
         "\nAll modules reachable by require/import from the given files are included in the analysis\n" +
@@ -385,6 +387,13 @@ async function main() {
 
             if (options.variableKinds)
                 out.reportVariableKinds();
+
+            if (options.async) {
+                const file = options.async;
+                const promiseAliases = getPromiseAliases(f);
+                writeFileSync(file, JSON.stringify(Object.fromEntries(promiseAliases), null, 2));
+                logger.info(`Promise aliases written to ${file}`);
+            }
         }
     }
 }

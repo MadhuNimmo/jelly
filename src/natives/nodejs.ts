@@ -1,6 +1,6 @@
 import {NativeFunctionParams, NativeModel, NativeModelParams} from "./nativebuilder";
 import {NativeObjectToken} from "../analysis/tokens";
-import {invokeCallback} from "./nativehelpers";
+import {invokeCallback, newSpecialObject, returnToken} from "./nativehelpers";
 
 /*
  * Models of Node.js standard built-in objects.
@@ -98,6 +98,15 @@ export const nodejsModels: NativeModel = {
             name: "structuredClone",
             invoke: (p: NativeFunctionParams) => {
                 // TODO: structuredClone
+            }
+        },
+        {
+            name: "fetch",
+            invoke: (p: NativeFunctionParams) => {
+                // Create a new Promise to represent the fetch call
+                const fetchPromise = newSpecialObject("Promise", p);
+                // Return the Promise
+                returnToken(fetchPromise, p);
             }
         },
     ],
