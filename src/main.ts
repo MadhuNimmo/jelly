@@ -4,7 +4,16 @@ import {analyzeFiles} from "./analysis/analyzer";
 import {closeSync, openSync, readdirSync, readFileSync, unlinkSync, writeFileSync} from "fs";
 import {program} from "commander";
 import logger, {logToFile, setLogLevel} from "./misc/logger";
-import {COPYRIGHT, options, PKG, setDefaultTrackedModules, setOptions, setPatternProperties, VERSION} from "./options";
+import {
+    COPYRIGHT,
+    options,
+    PKG,
+    resolveBaseDir,
+    setDefaultTrackedModules,
+    setOptions,
+    setPatternProperties,
+    VERSION
+} from "./options";
 import {spawnSync} from "child_process";
 import path, {sep} from "path";
 import {autoDetectBaseDir, expand, writeStreamedStringify} from "./misc/files";
@@ -247,6 +256,7 @@ async function main() {
         try {
             if (!autoDetectBaseDir(program.args))
                 return;
+            resolveBaseDir();
             files = expand(program.args);
         } catch (e) {
             logger.info(`Error: ${e instanceof Error ? "code" in e && e.code === "ENOENT" && "path" in e ? `File not found ${e.path}` : e.message : "Unable to expand paths"}`);
@@ -293,12 +303,12 @@ async function main() {
                 logger.info(`Loading vulnerability patterns from ${options.vulnerabilities}`);
                 vulnerabilityDetector = new VulnerabilityDetector(JSON.parse(readFileSync(options.vulnerabilities, "utf8")) as Array<Vulnerability>); // TODO: use when setting globs and props? (see also server.ts)
                 const ps = vulnerabilityDetector.getPatterns();
-                addAll(getGlobs(ps), (globs = (globs ?? new Set<string>())));
-                addAll(getProperties(ps), (props = (props ?? new Set<string>())));
+                addAll(getGlobs(ps), (globs = globs ?? new Set<string>()));
+                addAll(getProperties(ps), (props = props ?? new Set<string>()));
             }
 
             setDefaultTrackedModules(globs);
-            setPatternProperties(options.apiUsage ? undefined : (props || new Set()));
+            setPatternProperties(options.apiUsage ? undefined : props ?? new Set());
 
             const solver = new Solver();
             const a = solver.globalState;

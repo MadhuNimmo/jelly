@@ -32,13 +32,27 @@ import {
     TSLibraryUsageResponse,
     TypeScriptRequest
 } from "./typings/ipc";
-import {COPYRIGHT, options, resetOptions, setDefaultTrackedModules, setOptions, setPatternProperties} from "./options";
+import {
+    COPYRIGHT,
+    options,
+    resetOptions,
+    resolveBaseDir,
+    setDefaultTrackedModules,
+    setOptions,
+    setPatternProperties
+} from "./options";
 import {autoDetectBaseDir, expand} from "./misc/files";
 import {analyzeFiles} from "./analysis/analyzer";
 import {TypeScriptTypeInferrer} from "./typescript/typeinferrer";
 import {PatternWrapper, SemanticPatch} from "./typings/tapir";
 import {DetectionPattern} from "./patternmatching/patterns";
-import {convertTapirPatterns, getGlobs, getProperties, loadTapirDetectionPatternFiles, removeObsoletePatterns} from "./patternmatching/patternloader";
+import {
+    convertTapirPatterns,
+    getGlobs,
+    getProperties,
+    loadTapirDetectionPatternFiles,
+    removeObsoletePatterns
+} from "./patternmatching/patternloader";
 import {convertPatternMatchesToJSON, PatternMatcher} from "./patternmatching/patternmatcher";
 import {convertAPIUsageToJSON, getAPIUsage} from "./patternmatching/apiusage";
 import Solver, {AbortedException} from "./analysis/solver";
@@ -210,6 +224,7 @@ async function main() {
                 return prepareResponse(false, req, {message: "Analysis in progress"});
             files = req.arguments;
             autoDetectBaseDir(files);
+            resolveBaseDir();
             logger.info("Files selected");
             return prepareResponse(true, req);
         },

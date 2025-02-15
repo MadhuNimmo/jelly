@@ -1,6 +1,6 @@
 import {ChildProcess, fork} from "child_process";
 import logger from "../misc/logger";
-import {options, resolveBaseDir} from "../options";
+import {options} from "../options";
 import {HintsJSON, RequestType, ResponseType} from "../typings/hints";
 import {addPairArrayToMapSet, FilePath, LocationJSON, mapArraySize, percent, stringify} from "../misc/util";
 import {closeSync, openSync, writeSync} from "fs";
@@ -9,7 +9,7 @@ import {GlobalState} from "../analysis/globalstate";
 import {Hints} from "./hints";
 import Timer, {nanoToMs} from "../misc/timer";
 import {extname, resolve} from "path";
-import {isShebang, requireResolve, writeStreamedStringify} from "../misc/files";
+import {isLocalRequire, isShebang, requireResolve, writeStreamedStringify} from "../misc/files";
 import {ApproxDiagnostics} from "./diagnostics";
 
 /**
@@ -78,7 +78,6 @@ export class ProcessManager {
      * Starts approximate interpretation process.
      */
     constructor(readonly a: GlobalState = new GlobalState) {
-        resolveBaseDir();
         logger.verbose("Starting approximate interpretation process");
         // When running from test, __dirname is the .ts equivalent file so resolve this to the corresponding .js file.
         const resolvedDirname = __dirname.endsWith(".js") ? __dirname : `${__dirname}/../../lib/approx`
@@ -132,7 +131,7 @@ export class ProcessManager {
                     try {
                         const filepath = requireResolve(r, file, this.a);
                         if (filepath)
-                            this.a.reachedFile(filepath, m);
+                            this.a.reachedFile(filepath, m, isLocalRequire(r));
                     } catch {
                         logger.warn(`Unable to resolve module '${r}' from ${file}`);
                     }

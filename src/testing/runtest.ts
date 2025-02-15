@@ -1,4 +1,4 @@
-import {options, resetOptions, setDefaultTrackedModules, setPatternProperties} from "../options";
+import {options, resetOptions, resolveBaseDir, setDefaultTrackedModules, setPatternProperties} from "../options";
 import {tapirLoadPatterns, tapirPatternMatch} from "../patternmatching/tapirpatterns";
 import {analyzeFiles} from "../analysis/analyzer";
 import assert from "assert";
@@ -29,6 +29,7 @@ export function runTest(basedir: string,
                             matches?: {total: number, low?: number},
                             functionInfos?: number,
                             moduleInfos?: number,
+                            packageInfos?: number,
                             numberOfFunctionToFunctionEdges?: number,
                             oneCalleeCalls?: number,
                             funFound?: number,
@@ -40,7 +41,8 @@ export function runTest(basedir: string,
                             apiUsageAccessPathPatternsAtNodes?: number
                             vulnerabilities?: Array<Vulnerability>,
                             vulnerabilitiesMatches?: number,
-                            hasEdges?: Array<[string, string]>
+                            hasEdges?: Array<[string, string]>,
+                            containsTokens?: Array<[string, number]>
                         }) {
 
     const files = Array.isArray(app) ? app : [app];
@@ -61,6 +63,7 @@ export function runTest(basedir: string,
             Object.assign(options, args.options ?? {});
 
             options.basedir = basedir;
+            resolveBaseDir();
             options.patterns = args.patterns;
             options.soundness = args.soundness;
 
@@ -89,6 +92,8 @@ export function runTest(basedir: string,
                 expect(solver.globalState.functionInfos.size).toBe(args.functionInfos);
             if (args.moduleInfos !== undefined)
                 expect(solver.globalState.moduleInfos.size).toBe(args.moduleInfos);
+            if (args.packageInfos !== undefined)
+                expect(solver.globalState.packageInfos.size).toBe(args.packageInfos);
             if (args.numberOfFunctionToFunctionEdges !== undefined)
                 expect(solver.fragmentState.numberOfFunctionToFunctionEdges).toBe(args.numberOfFunctionToFunctionEdges);
             if (args.oneCalleeCalls !== undefined)
@@ -206,6 +211,25 @@ export function runTest(basedir: string,
                     if (!hasEdge(solver.fragmentState, src, dst))
                         assert.fail(`Call edge missing: ${src} -> ${dst}`);
             });
+
+        if (args.containsTokens)
+            test("contains tokens", () => {
+                const allRepsAndTokens: Array<[string, number]> = [];
+                for (const [rep, _, actualSize] of solver.fragmentState.getAllVarsAndTokens())
+                    allRepsAndTokens.push([rep.toString(), actualSize]);
+                for (const [cvar, expectedSize] of args.containsTokens!) {
+                    let found = false;
+                    for (const [repString, actualSize] of allRepsAndTokens)
+                        if (repString.includes(cvar)) {
+                            expect(actualSize).toBe(expectedSize);
+                            found = true;
+                        }
+                    if (expectedSize === 0)
+                        expect(found).toBe(false);
+                    else if (!found)
+                        assert.fail(`Specified constraint variable ${cvar} was not found`);
+                }
+            })
     });
 }
 

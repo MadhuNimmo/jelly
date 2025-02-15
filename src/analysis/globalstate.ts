@@ -1,5 +1,5 @@
 import {Function, Identifier, Node} from "@babel/types";
-import {FilePath, getOrSet, Location, locationToString, strHash} from "../misc/util";
+import {FilePath, getOrSet, Location, locationToStringWithFile, strHash} from "../misc/util";
 import {
     AncestorsVar,
     ArgumentsVar,
@@ -250,34 +250,47 @@ export class GlobalState {
     /**
      * Records that the given file has been reached, and returns its ModuleInfo.
      */
-    reachedFile(tofile: FilePath, from?: ModuleInfo): ModuleInfo {
+    reachedFile(tofile: FilePath, from?: ModuleInfo, local?: boolean): ModuleInfo {
         let moduleInfo;
         if (this.reachedFiles.has(tofile))
             moduleInfo = this.moduleInfosByPath.get(tofile)!;
         else {
 
             // find package.json and extract name, version, and main file
-            const p = getOrSet(this.packageJsonInfos, dirname(tofile), () => getPackageJsonInfo(tofile));
-            const rel = relative(p.dir, tofile);
-
-            // find or create PackageInfo
-            let packageInfo = this.packageInfos.get(p.packagekey);
+            let packageInfo: PackageInfo | undefined;
+            let rel: string | undefined;
             let otherfile: string | undefined;
-            if (!packageInfo) {
+            if (from && local) {
 
-                // package has not been reached before (also not in another directory)
-                packageInfo = new PackageInfo(p.name, p.version, p.main, p.dir, from === undefined);
-                this.packageInfos.set(p.packagekey, packageInfo);
-                if (!options.modulesOnly && !options.approxOnly && options.printProgress && logger.isVerboseEnabled())
-                    logger.verbose(`Reached package ${packageInfo} at ${p.dir}`);
-                if (this.vulnerabilities)
-                    this.vulnerabilities.reachedPackage(packageInfo);
-
+                // module in same package
+                packageInfo = from.packageInfo;
+                rel = relative(packageInfo.dir, tofile);
+                if (rel.startsWith("../"))
+                    throw new Error(`Relative module reference to ${from.getPath()} outside current package ${packageInfo}`);
             } else {
 
-                // package has been reached before, but maybe in another directory, so look for ModuleInfo there
-                otherfile = resolve(packageInfo.dir, rel);
-                moduleInfo = this.moduleInfosByPath.get(otherfile);
+                // module in other package
+                const p = getOrSet(this.packageJsonInfos, dirname(tofile), () => getPackageJsonInfo(tofile));
+                rel = relative(p.dir, tofile);
+
+                // find or create PackageInfo
+                packageInfo = this.packageInfos.get(p.packagekey);
+                if (!packageInfo) {
+
+                    // package has not been reached before (also not in another directory)
+                    packageInfo = new PackageInfo(p.name, p.version, p.main, p.dir, from === undefined);
+                    this.packageInfos.set(p.packagekey, packageInfo);
+                    if (!options.modulesOnly && !options.approxOnly && options.printProgress && logger.isVerboseEnabled())
+                        logger.verbose(`Reached package ${packageInfo} at ${p.dir}`);
+                    if (this.vulnerabilities)
+                        this.vulnerabilities.reachedPackage(packageInfo);
+
+                } else {
+
+                    // package has been reached before, but maybe in another directory, so look for ModuleInfo there
+                    otherfile = resolve(packageInfo.dir, rel);
+                    moduleInfo = this.moduleInfosByPath.get(otherfile);
+                }
             }
 
             if (moduleInfo) {
@@ -329,12 +342,14 @@ export class GlobalState {
     /**
      * Finds the nearest enclosing function or module.
      */
-    getEnclosingFunctionOrModule(path: NodePath, moduleInfo: ModuleInfo): FunctionInfo | ModuleInfo {
+    getEnclosingFunctionOrModule(path: NodePath): FunctionInfo | ModuleInfo {
         const p = getEnclosingFunction(path);
-        const caller = p ? this.functionInfos.get(p)! : moduleInfo;
-        if (!caller)
-            assert.fail(`Function/module info not found at ${moduleInfo}:${locationToString(path.node.loc)}!?!`);
-        return caller;
+        if (p)
+            return this.functionInfos.get(p)!;
+        const loc = path.node.loc as Location;
+        if (!loc?.module)
+            assert.fail(`Function/module info not found at ${locationToStringWithFile(path.node.loc)}!?!`);
+        return loc.module;
     }
 
     /**

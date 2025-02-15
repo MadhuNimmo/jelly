@@ -6,7 +6,7 @@ import Timer, {nanoToMs, TimeoutException} from "../misc/timer";
 import {getMapHybridSetSize, mapMapSize, percent} from "../misc/util";
 import {visit} from "./astvisitor";
 import {FunctionInfo, ModuleInfo, PackageInfo} from "./infos";
-import {options, resolveBaseDir} from "../options";
+import {options} from "../options";
 import {widenObjects} from "./widening";
 import {findModules} from "./modulefinder";
 import {parseAndDesugar} from "../parsing/parser";
@@ -27,7 +27,6 @@ export async function analyzeFiles(files: Array<string>, solver: Solver) {
     const a = solver.globalState;
     const d = solver.diagnostics;
     const timer = new Timer();
-    resolveBaseDir();
     const fragmentStates = new Map<ModuleInfo | PackageInfo, FragmentState>();
     if (options.approx || options.approxLoad) {
         a.approx = new ProcessManager(a);
@@ -69,7 +68,7 @@ export async function analyzeFiles(files: Array<string>, solver: Solver) {
 
                 d.modules++;
                 if (!options.modulesOnly && options.printProgress)
-                    logger.info(`Analyzing module ${file} (${d.modules})`);
+                    logger.info(`Analyzing module ${moduleInfo} (${d.modules})`);
 
                 const str = fs.readFileSync(file, "utf8"); // TODO: OK to assume utf8? (ECMAScript says utf16??)
                 writeStdOutIfActive(`Parsing ${file} (${Math.ceil(str.length / 1024)}KB)...`);

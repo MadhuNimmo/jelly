@@ -330,6 +330,7 @@ describe("tests/micro", () => {
     });
 
     runTest("tests/micro", "arrays5.js", {
+        options: {nativeOverwrites: true},
         soundness: "tests/micro/arrays5.json",
     });
 
@@ -695,6 +696,31 @@ describe("tests/micro", () => {
         oneCalleeCalls: 12,
     });
 
+    runTest("tests/micro", "super2.js", {
+        soundness: "tests/micro/super2.json",
+        funTotal: 5,
+        callTotal: 5,
+    });
+
+    runTest("tests/micro", "super3.js", {
+        options: {proto: true},
+        soundness: "tests/micro/super3.json",
+        numberOfFunctionToFunctionEdges: 4,
+        oneCalleeCalls: 4,
+    });
+
+    runTest("tests/micro", "super4.js", {
+        soundness: "tests/micro/super4.json",
+        funTotal: 6,
+        callTotal: 9,
+    });
+
+    runTest("tests/micro", "super5.js", {
+        soundness: "tests/micro/super5.json",
+        funTotal: 6,
+        callTotal: 6,
+    });
+
     runTest("tests/micro", "dpr-this.js", {
         soundness: "tests/micro/dpr-this.json",
         // TODO: patch dynamics heuristic does not kick in for dynamic property reads
@@ -785,12 +811,12 @@ describe("tests/micro", () => {
             functionInfos: 40,
             moduleInfos: 1,
             numberOfFunctionToFunctionEdges: callgraphNative? 54 : 25,
-            oneCalleeCalls: callgraphNative? 23 : 14,
+            oneCalleeCalls: callgraphNative ? 23 : 14,
             funFound: 24,
             funTotal: 28,
             callFound: 24,
             callTotal: 28,
-            reachableFound: callgraphNative? 32 : 1,
+            reachableFound: callgraphNative ? 32 : 1,
             reachableTotal: 33,
         });
     });
@@ -963,7 +989,29 @@ describe("tests/micro", () => {
                 },
                 patterns: ["call <terser>.minify"],
             }],
+            vulnerabilitiesMatches: 1
+        }));
+
+    describe("packagealias", () =>
+        runTest("tests/micro/packagealias", "index.js", {
+            vulnerabilities: [{
+                osv: {
+                    cwe: [],
+                    cvss: {score: 1, vectorString: ""},
+                    dependency: "set-value",
+                    range: ">=3.0.0 <3.0.3 || >=4.0.0 <4.0.1 || <2.0.1",
+                    name: "terser",
+                    severity: "high",
+                    source: 1,
+                    title: "title",
+                    url: "url"
+                },
+                patterns: [
+                    "call <set-value>"
+                ]
+            }],
             vulnerabilitiesMatches: 1,
+            packageInfos: 3
         }));
 
     describe("twoversions", () =>

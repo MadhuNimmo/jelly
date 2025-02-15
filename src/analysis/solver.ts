@@ -1,4 +1,11 @@
-import {ConstraintVar, IntermediateVar, isObjectPropertyVarObj, NodeVar, ObjectPropertyVarObj} from "./constraintvars";
+import {
+    ConstraintVar,
+    IntermediateVar,
+    isObjectPropertyVarObj,
+    NodeVar,
+    ObjectPropertyVar,
+    ObjectPropertyVarObj
+} from "./constraintvars";
 import logger, {GREY, isTTY, RESET, writeStdOut} from "../misc/logger";
 import {
     AccessPathToken,
@@ -6,13 +13,14 @@ import {
     ArrayToken,
     ClassToken,
     FunctionToken,
+    NativeObjectToken,
     ObjectToken,
     PackageObjectToken,
     PrototypeToken,
     Token
 } from "./tokens";
 import {GlobalState} from "./globalstate";
-import {PackageInfo} from "./infos";
+import {FunctionInfo, ModuleInfo, PackageInfo} from "./infos";
 import {
     addAll,
     addAllMapHybridSet,
@@ -169,8 +177,6 @@ export default class Solver {
     addToken(t: Token, toRep: RepresentativeVar): boolean {
         const f = this.fragmentState;
         if (f.addToken(t, toRep)) {
-            if (logger.isVerboseEnabled())
-                assert(!f.redirections.has(toRep));
             f.vars.add(toRep);
             this.tokenAdded(toRep, t);
             return true;
@@ -227,6 +233,10 @@ export default class Solver {
     ): Array<Token> | Token | undefined {
         if (logger.isDebugEnabled())
             logger.debug(`Added token ${t} to ${toRep}`);
+        if (logger.isVerboseEnabled()) {
+            assert(!this.fragmentState.redirections.has(toRep));
+            assert(!this.isIgnoredVar(toRep));
+        }
         if (!ws)
             ws = this.unprocessedTokens.get(toRep);
         // add to worklist
@@ -242,9 +252,11 @@ export default class Solver {
      * Also collects information for PatternMatcher about where access paths are created.
      * @param ap    the access path to add
      * @param to    the AST node (constraint variable) where to add the token (if not an AssignmentExpression)
+     * @param node  AST node (for pattern matcher)
+     * @param encl  enclosing function (for pattern matcher)
      * @param subap access path of the sub-expression (for call or property access expressions)
      */
-    addAccessPath(ap: AccessPath, to: ConstraintVar | undefined, subap?: AccessPath) { // TODO: store access paths separately from other tokens?
+    addAccessPath(ap: AccessPath, to: ConstraintVar | undefined, node?: Node, encl?: FunctionInfo | ModuleInfo, subap?: AccessPath) { // TODO: store access paths separately from other tokens?
         if (!to)
             return;
         const abstractProp = ap instanceof PropertyAccessPath && !(subap instanceof ModuleAccessPath && ap.prop === "default") && patternProperties && !patternProperties.has(ap.prop);
@@ -257,17 +269,18 @@ export default class Solver {
         if (!asn)
             this.addToken(f.a.canonicalizeToken(new AccessPathToken(ap2)), f.getRepresentative(to));
         // collect information for PatternMatcher
-        const t = to instanceof IntermediateVar && to.label === "import" ? to.node : to instanceof NodeVar ? to.node : undefined; // special treatment of 'import' expressions
-        if (t !== undefined) {
+        if (!(ap2 instanceof UnknownAccessPath || ap2 instanceof IgnoredAccessPath) &&
+            (to instanceof NodeVar || (to instanceof IntermediateVar && to.label === "import"))) {
+            assert(node !== undefined && encl !== undefined);
             if (ap2 instanceof ModuleAccessPath)
-                mapGetSet(f.moduleAccessPaths, ap2).add(t);
+                mapGetMap(f.moduleAccessPaths, ap2).set(node, encl);
             else if (ap2 instanceof PropertyAccessPath)
-                mapGetMap(mapGetMap(asn ? f.propertyWriteAccessPaths : f.propertyReadAccessPaths, subap!), ap2.prop).set(t, {bp: ap2, sub: ap2.base});
+                mapGetMap(mapGetMap(asn ? f.propertyWriteAccessPaths : f.propertyReadAccessPaths, subap!), ap2.prop).set(node, {bp: ap2, sub: ap2.base, encl});
             else if (ap2 instanceof CallResultAccessPath)
-                mapGetMap(f.callResultAccessPaths, subap!).set(t, {bp: ap2, sub: ap2.caller});
+                mapGetMap(f.callResultAccessPaths, subap!).set(node, {bp: ap2, sub: ap2.caller, encl});
             else if (ap2 instanceof ComponentAccessPath)
-                mapGetMap(f.componentAccessPaths, subap!).set(t, {bp: ap2, sub: ap2.component});
-            else if (!(ap2 instanceof UnknownAccessPath || ap2 instanceof IgnoredAccessPath))
+                mapGetMap(f.componentAccessPaths, subap!).set(node, {bp: ap2, sub: ap2.component, encl});
+            else
                 assert.fail("Unexpected AccessPath");
         }
     }
@@ -299,6 +312,8 @@ export default class Solver {
      */
     addSubsetConstraint(from: ConstraintVar | undefined, to: ConstraintVar | undefined) {
         if (from === undefined || to === undefined)
+            return;
+        if (this.isIgnoredVar(from) || this.isIgnoredVar(to))
             return;
         if (logger.isDebugEnabled())
             logger.debug(`Adding constraint ${from} \u2286 ${to}`);
@@ -393,6 +408,8 @@ export default class Solver {
     }
 
     private addForAllTokensConstraintPrivate(vRep: RepresentativeVar, id: ListenerID, key: TokenListener, listener: (t: Token) => void): boolean {
+        if (this.isIgnoredVar(vRep))
+            return false;
         const f = this.fragmentState;
         let bound = false;
         if (options.maxIndirections !== undefined)
@@ -533,12 +550,12 @@ export default class Solver {
             this.callTokenListener(id, listener, t, true); // ancestry is reflexive
             const g = this.globalState.globalSpecialNatives;
             if (g) { // (not set when called from unit tests)
-                if (t instanceof ObjectToken)
+                if (t instanceof ObjectToken || t instanceof PrototypeToken)
                     this.callTokenListener(id, listener, g.get(OBJECT_PROTOTYPE)!);
                 else if (t instanceof ArrayToken) {
                     this.callTokenListener(id, listener, g.get(ARRAY_PROTOTYPE)!);
                     this.callTokenListener(id, listener, g.get(OBJECT_PROTOTYPE)!);
-                } else if (t instanceof FunctionToken || t instanceof PrototypeToken || t instanceof ClassToken) {
+                } else if (t instanceof FunctionToken || t instanceof ClassToken) {
                     this.callTokenListener(id, listener, g.get(FUNCTION_PROTOTYPE)!);
                     this.callTokenListener(id, listener, g.get(OBJECT_PROTOTYPE)!);
                 } else if (t instanceof AllocationSiteToken) {
@@ -887,6 +904,14 @@ export default class Solver {
     }
 
     /**
+     * Checks whether the given constraint variable represents
+     * a getter/setter for a global native object.
+     */
+    isIgnoredVar(v: ConstraintVar): boolean {
+        return v instanceof ObjectPropertyVar && v.obj instanceof NativeObjectToken && !v.obj.moduleInfo && (v.accessor === "get" || v.accessor === "set");
+    }
+
+    /**
      * Processes all items in the worklist until a fixpoint is reached.
      * This notifies listeners and propagates tokens along subset edges.
      */
@@ -1008,7 +1033,7 @@ export default class Solver {
                         }
                     }
                     this.diagnostics.totalListenerCallTime += timer.elapsed();
-                    if (logger.isVerboseEnabled() || options.diagnostics)
+                    if (logger.isVerboseEnabled() || (options.diagnostics && options.printProgress))
                         logger.info(`Phase: ${this.phase}, round: ${round} completed after ${nanoToMs(this.timer.elapsed())} (call edges: ${f.numberOfCallToFunctionEdges}, vars: ${f.getNumberOfVarsWithTokens()}, tokens: ${f.numberOfTokens}, subsets: ${f.numberOfSubsetEdges})`);
                     round++;
                 }
@@ -1017,7 +1042,7 @@ export default class Solver {
                 logger.verbose(`Wave ${wave} completed after ${nanoToMs(this.timer.elapsed())}`);
             wave++;
         }
-        if (logger.isVerboseEnabled() || options.diagnostics)
+        if (logger.isVerboseEnabled() || (options.diagnostics && options.printProgress))
             logger.info(`${isTTY ? GREY : ""}Phase: ${this.phase}, completed after ${nanoToMs(this.timer.elapsed())} (call edges: ${f.numberOfCallToFunctionEdges}, vars: ${f.getNumberOfVarsWithTokens()}, tokens: ${f.numberOfTokens}, subsets: ${f.numberOfSubsetEdges})${isTTY ? RESET : ""}`);
         if (this.diagnostics.unprocessedTokensSize !== 0)
             assert.fail(`unprocessedTokensSize non-zero after propagate: ${this.diagnostics.unprocessedTokensSize}`);
@@ -1057,6 +1082,7 @@ export default class Solver {
         const f = this.fragmentState;
         // add processed listeners
         mapSetAddAll(s.listenersProcessed, f.listenersProcessed);
+        addAll(s.externalCallbacksProcessed, f.externalCallbacksProcessed);
         // merge redirections
         for (const [v, rep] of s.redirections) {
             const fRep = f.getRepresentative(v);
@@ -1162,13 +1188,13 @@ export default class Solver {
         addAll(s.invokedExpressions, f.invokedExpressions);
         addAll(s.maybeEscaping, f.maybeEscaping);
         addAll(s.widened, f.widened);
-        mapSetAddAll(s.maybeEscapingToExternal, f.maybeEscapingToExternal);
+        mapMapSetAll(s.maybeEscapingToExternal, f.maybeEscapingToExternal);
         setAll(s.unhandledDynamicPropertyWrites, f.unhandledDynamicPropertyWrites);
         addAll(s.unhandledDynamicPropertyReads, f.unhandledDynamicPropertyReads);
         addAllMapHybridSet(s.errors, f.errors);
         addAllMapHybridSet(s.warnings, f.warnings);
         addAllMapHybridSet(s.warningsUnsupported, f.warningsUnsupported);
-        mapSetAddAll(s.moduleAccessPaths, f.moduleAccessPaths);
+        mapMapSetAll(s.moduleAccessPaths, f.moduleAccessPaths);
         mapMapMapSetAll(s.propertyReadAccessPaths, f.propertyReadAccessPaths);
         mapMapMapSetAll(s.propertyWriteAccessPaths, f.propertyWriteAccessPaths);
         mapMapSetAll(s.callResultAccessPaths, f.callResultAccessPaths);
