@@ -63,6 +63,7 @@ import {
     LVal,
     MemberExpression,
     NewExpression,
+    Node,
     ObjectExpression,
     ObjectMethod,
     ObjectProperty,
@@ -125,6 +126,8 @@ import {JELLY_NODE_ID} from "../parsing/extras";
 
 export const IDENTIFIER_KIND = Symbol();
 
+export const parentMap = new Map<Node, Node>();
+
 export function visit(ast: File, op: Operations) {
     const solver = op.solver;
     const a = solver.globalState;
@@ -135,7 +138,19 @@ export function visit(ast: File, op: Operations) {
     // traverse the AST and extend the analysis result with information about the current module
     if (logger.isVerboseEnabled())
         logger.verbose(`Traversing AST of ${op.file}`);
+
+    if(ast.program){
+        parentMap.set(ast.program, ast); 
+    }
+
     traverse(ast, {
+
+        enter(path: NodePath) {
+
+            if (path.parent && path.node) {
+                parentMap.set(path.node, path.parent); // Store parent relationship
+            }
+        },
 
         ThisExpression(path: NodePath<ThisExpression>) {
 
