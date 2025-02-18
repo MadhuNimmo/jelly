@@ -23,55 +23,6 @@ function isBuiltInPromiseAPI(node: any): boolean {
 export function getPromiseAliases(f: FragmentState) {
     const promiseAliases = new Map();
 
-    // function findEnclosingFunction(node: Node | undefined, f: FragmentState): string | undefined {
-    //     while (node) {
-    //         // Function types
-    //         if (node.type === "FunctionDeclaration" || 
-    //             node.type === "FunctionExpression" || 
-    //             node.type === "ArrowFunctionExpression") {
-    //             return locationToStringWithFileAndEnd(node.loc);
-    //         }
-    
-    //         // Method definitions in classes
-    //         if (node.type === "ClassMethod" ||
-    //             node.type === "ClassPrivateMethod" ||
-    //             node.type === "ObjectMethod") {
-    //             return locationToStringWithFileAndEnd(node.loc);
-    //         }
-    
-    //         // Getter/Setter methods
-    //         if (node.type === "ClassProperty" ||
-    //             node.type === "ClassPrivateProperty" ||
-    //             node.type === "ObjectProperty") {
-    //             const value = (node as any).value;
-    //             if (value && (
-    //                 value.type === "FunctionExpression" ||
-    //                 value.type === "ArrowFunctionExpression"
-    //             )) {
-    //                 return locationToStringWithFileAndEnd(value.loc);
-    //             }
-    //         }
-    
-    //         // Special case for identifiers in function declarations
-    //         if (node.type === "Identifier" && (node as any).parent?.type === "FunctionDeclaration") {
-    //             return locationToStringWithFileAndEnd((node as any).parent.loc);
-    //         }
-
-    //         if (node.type==="AwaitExpression"){
-    //             console.log("Here", node.parent)
-    //         }
-            
-    //         // Check call-to-containing function map
-    //         const enclosingFunction = f.callToContainingFunction.get(node);
-    //         if (enclosingFunction) {
-    //             return locationToStringWithFileAndEnd(enclosingFunction.loc);
-    //         }
-    
-    //         node = (node as any).parent || undefined;
-    //     }
-    //     return undefined;
-    // }
-
     function findEnclosingFunction(node: Node, parentMap: Map<Node, Node>, f: FragmentState): string | undefined {
         while (node) {
             if (node.type === "FunctionDeclaration" || 
@@ -114,43 +65,19 @@ export function getPromiseAliases(f: FragmentState) {
             functionTouchCount: 0,
             objectsContainingAliases: new Set(),
             storedInObjectOrArrayCount: 0,
-            chainedFrom: null,
+            //chainedFrom: null,
             awaitLocations: new Set(),
             isAsyncPromise: false
         };
     }
 
-    // First pass: Find all async functions and register their implicit promises
-    for (const [var_, _] of f.getAllVarsAndTokens()) {
-        if (var_ instanceof NodeVar) {
-            const node = var_.node;
-            
-            // Check for async functions
-            if ((node.type === "FunctionDeclaration" || 
-                 node.type === "FunctionExpression" || 
-                 node.type === "ArrowFunctionExpression") && 
-                (node as any).async === true) {
-                
-                const promiseId = Solver.prototype.getNodeHash(node).toString() + "_async";
-                if (!promiseAliases.has(promiseId)) {
-                    promiseAliases.set(promiseId, createNewPromiseEntry(locationToStringWithFileAndEnd(node.loc)));
-                    promiseAliases.get(promiseId).isAsyncPromise = true;
-                    
-                    // Add the function itself to the containing functions
-                    const functionLocation = locationToStringWithFileAndEnd(node.loc);
-                    promiseAliases.get(promiseId).functionsContainingAliases.add(functionLocation);
-                }
-            }
-        }
-    }
-
-    // Second pass: Handle explicit promises and await expressions
     for (const [var_, tokens] of f.getAllVarsAndTokens()) {
-        if (var_ instanceof NodeVar && isPromiseCreation(var_.node)) {
+        if (var_ instanceof NodeVar && isPromiseCreation(var_.node) || (var_ instanceof FunctionReturnVar && isPromiseCreation(var_.fun))) {
             const promiseId = getNodeIdentifier(var_);
-
+            if (promiseId==undefined){
+                continue
+            }
             if (!promiseAliases.has(promiseId)) {
-                //console.log(promiseId, var_.node)
                 promiseAliases.set(promiseId, createNewPromiseEntry(""));
             }
             
@@ -158,11 +85,8 @@ export function getPromiseAliases(f: FragmentState) {
             for (const token of tokens) {
 
                 if (token instanceof AllocationSiteToken && token.kind === "Promise") {
-                    // if (!promiseAliases.has(promiseId)) {
-                    //     promiseAliases.set(promiseId, createNewPromiseEntry(locationToStringWithFileAndEnd(var_.node.loc)));
-                    // }
                     promiseAliases.get(promiseId).promiseDefinitionLocation = 
-                       locationToStringWithFileAndEnd(var_.node.loc);//token.allocSite.loc
+                    "node" in var_ ? locationToStringWithFileAndEnd(var_.node.loc) : locationToStringWithFileAndEnd(var_.fun.loc); //token.allocSite.loc
                 }
             }
             
@@ -184,7 +108,7 @@ export function getPromiseAliases(f: FragmentState) {
 
             for (const alias of aliases) {
                 let node: Node | undefined;
-                console.log(alias)
+                //console.log(alias)
                 if (alias instanceof NodeVar) {
                     node = alias.node;
                     // Track await expressions
@@ -202,25 +126,14 @@ export function getPromiseAliases(f: FragmentState) {
                     }
                 } else if (alias instanceof FunctionReturnVar) {
                     node = alias.fun;
+                    if (node.async){
+                        promiseAliases.get(promiseId).isAsyncPromise= true;
+                    }
                 } else if (alias instanceof ObjectPropertyVar && "allocSite" in alias.obj) {
-                    // Only count as stored in object if it's actually assigned to a property
-                    const parentNode = (alias.obj.allocSite as any).parent;
-                    const isPropertyAssignment = 
-                        parentNode && 
-                        (parentNode.type === "AssignmentExpression" || 
-                        parentNode.type === "PropertyDefinition" ||
-                        (parentNode.type === "Property" && 
-                        !parentNode.method && // Exclude method definitions
-                        !parentNode.get && // Exclude getters
-                        !parentNode.set)); // Exclude setters
-
-                    if (isPropertyAssignment) {
-                        node = alias.obj.allocSite;
-                        if (promiseAliases.has(promiseId)){
-                            promiseAliases.get(promiseId).objectsContainingAliases.add(
-                                locationToStringWithFileAndEnd(alias.obj.allocSite.loc)
-                            );
-                        }
+                    if (promiseAliases.has(promiseId)){
+                        promiseAliases.get(promiseId).objectsContainingAliases.add(
+                            locationToStringWithFileAndEnd(alias.obj.allocSite.loc)
+                        );
                     }
                 }
 
@@ -242,9 +155,8 @@ export function getPromiseAliases(f: FragmentState) {
                 }
             }
 
-            // Update counts
-            const promiseInfo = promiseAliases.get(promiseId);
-            if (promiseInfo){
+            if (promiseAliases.has(promiseId)){
+                const promiseInfo =  promiseAliases.get(promiseId)
                 promiseInfo.functionTouchCount = promiseInfo.functionsContainingAliases.size;
                 promiseInfo.storedInObjectOrArrayCount = promiseInfo.objectsContainingAliases.size;
             }
@@ -262,7 +174,7 @@ export function getPromiseAliases(f: FragmentState) {
                 functionTouchCount: value.functionTouchCount,
                 objectsContainingAliases: [...value.objectsContainingAliases],
                 storedInObjectOrArrayCount: value.storedInObjectOrArrayCount,
-                chainedFrom: value.chainedFrom,
+                //chainedFrom: value.chainedFrom,
                 awaitLocations: [...value.awaitLocations],
                 isAsyncPromise: value.isAsyncPromise
             }
@@ -271,6 +183,13 @@ export function getPromiseAliases(f: FragmentState) {
 }
 
 function isPromiseCreation(node: any): boolean {
+    if ((node.type === "FunctionDeclaration" || 
+        node.type === "FunctionExpression" || 
+        node.type === "ArrowFunctionExpression") && 
+       node.async === true) {
+       return true;
+   }
+   
     // First check if it's a Promise.all or similar static method call
     if (node.type === "CallExpression" && 
         node.callee.type === "MemberExpression" &&
@@ -292,21 +211,19 @@ function isPromiseCreation(node: any): boolean {
     return (
         // Direct Promise creation
         (node.type === "NewExpression" && node.callee.name === "Promise") ||
-        // Await expressions
-        node.type === "AwaitExpression" ||
         // Promise chain methods
         (node.type === "CallExpression" &&
          node.callee.type === "MemberExpression" &&
          ["then", "catch", "finally"].includes(node.callee.property.name)) ||
-        // Async function calls
-        (node.type === "CallExpression" &&
-         node.callee.type === "Identifier" &&
-         (node.callee as any).parent?.type === "FunctionDeclaration" &&
-         (node.callee as any).parent.async === true) ||
         isBuiltInPromiseAPI(node)
     );
 }
 
-function getNodeIdentifier(node: NodeVar): string {
-    return Solver.prototype.getNodeHash(node.node).toString();
+function getNodeIdentifier(node: any): string | undefined {
+    if (node instanceof NodeVar){
+        return Solver.prototype.getNodeHash(node.node).toString();
+    }else if(node instanceof FunctionReturnVar){
+        return Solver.prototype.getNodeHash(node.fun).toString();
+    }
+    return undefined
 }
