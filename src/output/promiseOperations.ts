@@ -72,7 +72,7 @@ export function getPromiseAliases(f: FragmentState) {
     }
 
     for (const [var_, tokens] of f.getAllVarsAndTokens()) {
-        if (var_ instanceof NodeVar && isPromiseCreation(var_.node) || (var_ instanceof FunctionReturnVar && isPromiseCreation(var_.fun))) {
+        if ((var_ instanceof NodeVar && isPromiseCreation(var_.node)) || (var_ instanceof FunctionReturnVar && isPromiseCreation(var_.fun))) {
             const promiseId = getNodeIdentifier(var_);
             if (promiseId==undefined){
                 continue
@@ -85,9 +85,14 @@ export function getPromiseAliases(f: FragmentState) {
             for (const token of tokens) {
 
                 if (token instanceof AllocationSiteToken && token.kind === "Promise") {
-                    promiseAliases.get(promiseId).promiseDefinitionLocation = 
-                    "node" in var_ ? locationToStringWithFileAndEnd(var_.node.loc) : locationToStringWithFileAndEnd(var_.fun.loc); //token.allocSite.loc
+                    const defAddress = "node" in var_ ? locationToStringWithFileAndEnd(var_.node.loc, true) : locationToStringWithFileAndEnd(var_.fun.loc, true); //token.allocSite.loc
+                    promiseAliases.get(promiseId).promiseDefinitionLocation = defAddress;
                 }
+            }
+
+            if (promiseAliases.get(promiseId).promiseDefinitionLocation==""){
+                promiseAliases.delete(promiseId)
+                continue
             }
             
             const aliases = new Set<ConstraintVar>();
@@ -129,7 +134,8 @@ export function getPromiseAliases(f: FragmentState) {
                     if (node.async){
                         promiseAliases.get(promiseId).isAsyncPromise= true;
                     }
-                } else if (alias instanceof ObjectPropertyVar && "allocSite" in alias.obj) {
+                } else if (alias instanceof ObjectPropertyVar && alias.obj instanceof AllocationSiteToken 
+                    && (alias.obj.kind === "Object" || alias.obj.kind === "Array")) {
                     if (promiseAliases.has(promiseId)){
                         promiseAliases.get(promiseId).objectsContainingAliases.add(
                             locationToStringWithFileAndEnd(alias.obj.allocSite.loc)
