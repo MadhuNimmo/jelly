@@ -6,6 +6,8 @@ import { locationToStringWithFileAndEnd } from "../misc/util";
 import { Node } from "@babel/types";
 import { parentMap } from "../analysis/astvisitor";
 
+type PromiseFlag = 'all' | 'noasync' | 'newpromise';
+
 const PROMISE_RETURNING_APIS = new Set([
     'fetch'
 ]);
@@ -17,10 +19,9 @@ function isBuiltInPromiseAPI(node: any): boolean {
         }
     }
         return false;
-    }
-    
+}
 
-export function getPromiseAliases(f: FragmentState) {
+export function getPromiseAliases(f: FragmentState, flag: PromiseFlag ) {
     const promiseAliases = new Map();
 
     function findEnclosingFunction(node: Node, parentMap: Map<Node, Node>, f: FragmentState): string | undefined {
@@ -65,14 +66,17 @@ export function getPromiseAliases(f: FragmentState) {
             functionTouchCount: 0,
             objectsContainingAliases: new Set(),
             storedInObjectOrArrayCount: 0,
-            //chainedFrom: null,
             awaitLocations: new Set(),
-            isAsyncPromise: false
+            isAsyncPromise: false,
+            chainLocations: new Set(),
+            isStaticMethodPromise: false,
+            inputPromises: new Set()
         };
     }
 
     for (const [var_, tokens] of f.getAllVarsAndTokens()) {
-        if ((var_ instanceof NodeVar && isPromiseCreation(var_.node)) || (var_ instanceof FunctionReturnVar && isPromiseCreation(var_.fun))) {
+
+        if ((var_ instanceof NodeVar && isPromiseCreation(var_.node, flag)) || (var_ instanceof FunctionReturnVar && isPromiseCreation(var_.fun, flag))) {
             const promiseId = getNodeIdentifier(var_);
             if (promiseId==undefined){
                 continue
@@ -81,13 +85,38 @@ export function getPromiseAliases(f: FragmentState) {
                 promiseAliases.set(promiseId, createNewPromiseEntry(""));
             }
             
+            if (Array.isArray(tokens) ? tokens.length > 1 : tokens.size > 1){
+                console.log(var_, tokens)
+            }
             
             for (const token of tokens) {
 
-                if (token instanceof AllocationSiteToken && token.kind === "Promise") {
-                    const defAddress = "node" in var_ ? locationToStringWithFileAndEnd(var_.node.loc, true) : locationToStringWithFileAndEnd(var_.fun.loc, true); //token.allocSite.loc
-                    promiseAliases.get(promiseId).promiseDefinitionLocation = defAddress;
+                if (token instanceof AllocationSiteToken) {
+                    if (token.kind === "Promise") {
+                        const defAddress = "node" in var_ ? 
+                            locationToStringWithFileAndEnd(var_.node.loc, true) : 
+                            locationToStringWithFileAndEnd(var_.fun.loc, true);
+                            
+                        const promiseInfo = promiseAliases.get(promiseId);
+                        promiseInfo.promiseDefinitionLocation = defAddress;
+                
+                        // if (token.allocSite.type === "CallExpression" && 
+                        //     token.allocSite.callee.type === "MemberExpression") {
+
+                        //     const methodName = "name" in token.allocSite.callee.property ? token.allocSite.callee.property.name: "";
+                        //     if (["all", "race", "allSettled", "any"].includes(methodName)) {
+                        //         promiseInfo.isStaticMethodPromise = true;
+                                
+                        //     }
+                                
+                            
+                        // }
+
+
+
+                    }
                 }
+
             }
 
             if (promiseAliases.get(promiseId).promiseDefinitionLocation==""){
@@ -113,7 +142,6 @@ export function getPromiseAliases(f: FragmentState) {
 
             for (const alias of aliases) {
                 let node: Node | undefined;
-                //console.log(alias)
                 if (alias instanceof NodeVar) {
                     node = alias.node;
                     // Track await expressions
@@ -129,18 +157,22 @@ export function getPromiseAliases(f: FragmentState) {
                             promiseAliases.get(promiseId).functionsContainingAliases.add(enclosingFunction);
                         }
                     }
+
                 } else if (alias instanceof FunctionReturnVar) {
                     node = alias.fun;
                     if (node.async){
                         promiseAliases.get(promiseId).isAsyncPromise= true;
                     }
-                } else if (alias instanceof ObjectPropertyVar && alias.obj instanceof AllocationSiteToken 
-                    && (alias.obj.kind === "Object" || alias.obj.kind === "Array")) {
-                    if (promiseAliases.has(promiseId)){
-                        promiseAliases.get(promiseId).objectsContainingAliases.add(
-                            locationToStringWithFileAndEnd(alias.obj.allocSite.loc)
-                        );
-                    }
+                } else if ((alias instanceof ObjectPropertyVar) && alias.obj instanceof AllocationSiteToken){
+
+                        if (alias.obj.kind === "Object" || alias.obj.kind === "Array") {
+                            if (promiseAliases.has(promiseId)){
+                                promiseAliases.get(promiseId).objectsContainingAliases.add(
+                                    locationToStringWithFileAndEnd(alias.obj.allocSite.loc)
+                                );
+                            }
+                        }
+
                 }
 
                 if (node) {
@@ -180,49 +212,79 @@ export function getPromiseAliases(f: FragmentState) {
                 functionTouchCount: value.functionTouchCount,
                 objectsContainingAliases: [...value.objectsContainingAliases],
                 storedInObjectOrArrayCount: value.storedInObjectOrArrayCount,
-                //chainedFrom: value.chainedFrom,
                 awaitLocations: [...value.awaitLocations],
-                isAsyncPromise: value.isAsyncPromise
+                isAsyncPromise: value.isAsyncPromise,
+                chainLocations: value.chainLocations,
+                isStaticMethodPromise: value.isStaticMethodPromise,
+                inputPromises: value.inputPromises
+
             }
         ])
     );
 }
 
-function isPromiseCreation(node: any): boolean {
-    if ((node.type === "FunctionDeclaration" || 
-        node.type === "FunctionExpression" || 
-        node.type === "ArrowFunctionExpression") && 
-       node.async === true) {
-       return true;
-   }
-   
-    // First check if it's a Promise.all or similar static method call
-    if (node.type === "CallExpression" && 
-        node.callee.type === "MemberExpression" &&
-        node.callee.object.name === "Promise") {
-        
-        // Ensure we capture the location for static methods
-        if (["all", "race", "allSettled", "any"].includes(node.callee.property.name)) {
-            // The allocation site should be the entire Promise.all call
-            (node as any).isPromiseStaticCall = true;
-            return true;
-        }
-        
-        // Handle Promise.resolve/reject
-        if (["resolve", "reject"].includes(node.callee.property.name)) {
-            return true;
-        }
-    }
+function isPromiseCreation(node: any, flag: PromiseFlag): boolean {
 
-    return (
-        // Direct Promise creation
-        (node.type === "NewExpression" && node.callee.name === "Promise") ||
-        // Promise chain methods
-        (node.type === "CallExpression" &&
-         node.callee.type === "MemberExpression" &&
-         ["then", "catch", "finally"].includes(node.callee.property.name)) ||
-        isBuiltInPromiseAPI(node)
-    );
+    // Helper function to check async functions
+    const isAsyncFunction = () => 
+        ((node.type === "FunctionDeclaration" ||
+          node.type === "FunctionExpression" ||
+          node.type === "ArrowFunctionExpression" ||
+          node.type === "ClassMethod" ||
+          node.type === "ObjectMethod" ||
+          (node.type === "Property" && node.method === true)) &&
+         node.async === true);
+
+    // Helper function to check direct Promise creation
+    const isNewPromise = () =>
+        node.type === "NewExpression" && 
+        node.callee.name === "Promise";
+
+    // Helper function to check Promise static methods and chains
+    const isPromiseMethod = () => {
+        if (node.type === "CallExpression" &&
+            node.callee.type === "MemberExpression") {
+            
+            // Static methods
+            if (node.callee.object.name === "Promise") {
+                const methodName = node.callee.property.name;
+                
+                if (["all", "race", "allSettled", "any"].includes(methodName)) {
+                    (node as any).isPromiseStaticCall = true;
+                    return true;
+                }
+                
+                if (["resolve", "reject"].includes(methodName)) {
+                    return true;
+                }
+            }
+            
+            // Chain methods
+            if (["then", "catch", "finally"].includes(node.callee.property.name)) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    switch (flag) {
+        case 'all':
+            return isAsyncFunction() || 
+                   isNewPromise() || 
+                   isPromiseMethod() || 
+                   isBuiltInPromiseAPI(node);
+            
+        case 'noasync':
+            return isNewPromise() || 
+                   isPromiseMethod() || 
+                   isBuiltInPromiseAPI(node);
+            
+        case 'newpromise':
+            return isNewPromise();
+            
+        default:
+            return false;
+    }
 }
 
 function getNodeIdentifier(node: any): string | undefined {
