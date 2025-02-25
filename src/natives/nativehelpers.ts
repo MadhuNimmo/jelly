@@ -40,6 +40,8 @@ import {NodePath} from "@babel/traverse";
 import {Operations} from "../analysis/operations";
 import {AccessorType, ConstraintVar, IntermediateVar, isObjectPropertyVarObj, ObjectPropertyVarObj} from "../analysis/constraintvars";
 import {UnknownAccessPath} from "../analysis/accesspaths";
+import { recordPromiseChain, recordPromiseInput } from '../output/promiseOperations';
+import { locationToStringWithFileAndEnd } from "../misc/util";
 
 /**
  * Models an assignment from a function parameter (0-based indexing) to a property of the base object.
@@ -522,7 +524,28 @@ export function invokeCallbackBound(kind: CallbackKind, p: NativeFunctionParams,
             }
             // create a new promise
             const thenPromise = newSpecialObject("Promise", p);
-
+            // Record the promise chain relationship
+            if (bt.allocSite && thenPromise.allocSite) {
+                const sourcePromiseHash = solver.getNodeHash(bt.allocSite).toString();
+                const targetPromiseHash = solver.getNodeHash(thenPromise.allocSite).toString();
+                
+                let chainType: 'then' | 'catch' | 'finally';
+                if (kind === "Promise.prototype.then$onFulfilled" || kind === "Promise.prototype.then$onRejected") {
+                    chainType = 'then';
+                } else if (kind === "Promise.prototype.catch$onRejected") {
+                    chainType = 'catch';
+                } else { // kind === "Promise.prototype.finally$onFinally"
+                    chainType = 'finally';
+                }
+                
+                const handlerLocation = ft instanceof FunctionToken && ft.fun.loc 
+                    ? locationToStringWithFileAndEnd(ft.fun.loc)
+                    : "unknown";
+                
+                // Record the chain relationship
+                recordPromiseChain(sourcePromiseHash, targetPromiseHash, chainType, handlerLocation);
+            }
+            
             if (ft instanceof FunctionToken) {
                 // assign promise fulfilled/rejected value to the callback parameter and add call edge
                 modelCall([prop !== undefined ? vp.objPropVar(bt, prop) : undefined]);
@@ -816,6 +839,7 @@ export function returnPromiseIterator(kind: "all" | "allSettled" | "any" | "race
         if (arg) {
             // make a new promise and return it
             const promise = newSpecialObject("Promise", p);
+            const resultPromiseHash = p.solver.getNodeHash(promise.allocSite).toString();
             p.solver.addTokenConstraint(promise, p.solver.varProducer.expVar(p.path.node, p.path));
             let array: ArrayToken | undefined;
             if (kind === "all" || kind === "allSettled") {
@@ -849,6 +873,10 @@ export function returnPromiseIterator(kind: "all" | "allSettled" | "any" | "race
             }
             p.solver.addForAllTokensConstraint(tmp, key, p.path.node, (t: Token) => {
                 const vp = p.solver.varProducer;
+                if (t instanceof AllocationSiteToken && t.kind === "Promise") {
+                    const inputPromiseHash = p.solver.getNodeHash(t.allocSite).toString();
+                    recordPromiseInput(resultPromiseHash, inputPromiseHash, kind, locationToStringWithFileAndEnd(t.allocSite.loc));
+                }
                 switch (kind) {
                     case "all":
                         if (t instanceof AllocationSiteToken && t.kind === "Promise") {

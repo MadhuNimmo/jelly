@@ -8,6 +8,67 @@ import { parentMap } from "../analysis/astvisitor";
 
 type PromiseFlag = 'all' | 'noasync' | 'newpromise';
 
+export type PromiseChainRelationship = {
+    chainType: 'then' | 'catch' | 'finally',
+    chainPromiseId: string,     // Hash of target promise's allocation site
+    handlerLocation: string    // Location of the handler function
+  };
+  
+  export const promiseChainMap = new Map<string, PromiseChainRelationship[]>();
+  
+  export function recordPromiseChain(
+    sourcePromiseHash: string,
+    chainPromiseHash: string,
+    chainType: 'then' | 'catch' | 'finally',
+    handlerLocation: string
+  ): void {
+    if (!promiseChainMap.has(sourcePromiseHash)) {
+      promiseChainMap.set(sourcePromiseHash, []);
+    }
+    
+    promiseChainMap.get(sourcePromiseHash)!.push({
+      chainType,
+      chainPromiseId: chainPromiseHash,
+      handlerLocation
+    });
+  }
+
+  export function getPromiseChains(promiseHash: string): PromiseChainRelationship[] {
+    return promiseChainMap.get(promiseHash) || [];
+  }
+
+
+  // Add to PromiseOperations.ts
+
+export type AggregateMethodType = 'all' | 'race' | 'allSettled' | 'any';
+
+export type PromiseInputRelationship = {
+  methodType: AggregateMethodType,
+  inputPromise: string,     // Hash of input promise's allocation site
+  inputLocation: string     // Location of the input in the code
+};
+
+    // Map from result promise hash to its input promises
+    export const promiseInputMap = new Map<string, PromiseInputRelationship[]>();
+
+    export function recordPromiseInput(
+    resultPromiseHash: string,
+    inputPromiseHash: string,
+    methodType: AggregateMethodType,
+    inputLocation: string
+    ): void {
+    if (!promiseInputMap.has(resultPromiseHash)) {
+        promiseInputMap.set(resultPromiseHash, []);
+    }
+    
+    promiseInputMap.get(resultPromiseHash)!.push({
+        methodType,
+        inputPromise: inputPromiseHash,
+        inputLocation
+    });
+    }
+  
+
 const PROMISE_RETURNING_APIS = new Set([
     'fetch'
 ]);
@@ -20,6 +81,7 @@ function isBuiltInPromiseAPI(node: any): boolean {
     }
         return false;
 }
+  
 
 export function getPromiseAliases(f: FragmentState, flag: PromiseFlag ) {
     const promiseAliases = new Map();
@@ -69,7 +131,7 @@ export function getPromiseAliases(f: FragmentState, flag: PromiseFlag ) {
             awaitLocations: new Set(),
             isAsyncPromise: false,
             chainLocations: new Set(),
-            isStaticMethodPromise: false,
+            isAggregateMethodPromise: false,
             inputPromises: new Set()
         };
     }
@@ -99,21 +161,24 @@ export function getPromiseAliases(f: FragmentState, flag: PromiseFlag ) {
                             
                         const promiseInfo = promiseAliases.get(promiseId);
                         promiseInfo.promiseDefinitionLocation = defAddress;
-                
-                        // if (token.allocSite.type === "CallExpression" && 
-                        //     token.allocSite.callee.type === "MemberExpression") {
 
-                        //     const methodName = "name" in token.allocSite.callee.property ? token.allocSite.callee.property.name: "";
-                        //     if (["all", "race", "allSettled", "any"].includes(methodName)) {
-                        //         promiseInfo.isStaticMethodPromise = true;
-                                
-                        //     }
-                                
+                        if (var_ instanceof NodeVar && var_.node.type === "CallExpression" &&
+                            var_.node.callee.type === "MemberExpression") {
                             
-                        // }
+                            // Static methods
+                            if (var_.node.callee.object.type === "Identifier" && 
+                                var_.node.callee.object.name === "Promise" && 
+                                var_.node.callee.property.type === "Identifier") {
+                                
+                                const methodName = var_.node.callee.property.name;
+                                
+                                if (["all", "race", "allSettled", "any"].includes(methodName)) {
+                                    promiseInfo.isAggregateMethodPromise = true;
+                                }
+                            }
 
-
-
+                        }
+                            
                     }
                 }
 
@@ -163,9 +228,9 @@ export function getPromiseAliases(f: FragmentState, flag: PromiseFlag ) {
                     if (node.async){
                         promiseAliases.get(promiseId).isAsyncPromise= true;
                     }
-                } else if ((alias instanceof ObjectPropertyVar) && alias.obj instanceof AllocationSiteToken){
+                } else if ((alias instanceof ObjectPropertyVar)){
 
-                        if (alias.obj.kind === "Object" || alias.obj.kind === "Array") {
+                        if (alias.obj instanceof AllocationSiteToken && (alias.obj.kind === "Object" || alias.obj.kind === "Array")) {
                             if (promiseAliases.has(promiseId)){
                                 promiseAliases.get(promiseId).objectsContainingAliases.add(
                                     locationToStringWithFileAndEnd(alias.obj.allocSite.loc)
@@ -174,7 +239,6 @@ export function getPromiseAliases(f: FragmentState, flag: PromiseFlag ) {
                         }
 
                 }
-
                 if (node) {
                     const enclosingFunction = findEnclosingFunction(node, parentMap, f);
                     if (promiseAliases.has(promiseId) && enclosingFunction) {
@@ -195,8 +259,13 @@ export function getPromiseAliases(f: FragmentState, flag: PromiseFlag ) {
 
             if (promiseAliases.has(promiseId)){
                 const promiseInfo =  promiseAliases.get(promiseId)
+                const inputRelationships = promiseInputMap.get(promiseId) || [];
+                if (promiseInfo.isAggregateMethodPromise) {
+                    promiseInfo.inputPromises = inputRelationships;
+                }
                 promiseInfo.functionTouchCount = promiseInfo.functionsContainingAliases.size;
                 promiseInfo.storedInObjectOrArrayCount = promiseInfo.objectsContainingAliases.size;
+                promiseInfo.chainLocations = getPromiseChains(promiseId);
             }
             
         }
@@ -214,9 +283,9 @@ export function getPromiseAliases(f: FragmentState, flag: PromiseFlag ) {
                 storedInObjectOrArrayCount: value.storedInObjectOrArrayCount,
                 awaitLocations: [...value.awaitLocations],
                 isAsyncPromise: value.isAsyncPromise,
-                chainLocations: value.chainLocations,
-                isStaticMethodPromise: value.isStaticMethodPromise,
-                inputPromises: value.inputPromises
+                chainLocations: [...value.chainLocations],
+                isAggregateMethodPromise: value.isAggregateMethodPromise,
+                inputPromises: [...value.inputPromises]
 
             }
         ])
@@ -287,7 +356,7 @@ function isPromiseCreation(node: any, flag: PromiseFlag): boolean {
     }
 }
 
-function getNodeIdentifier(node: any): string | undefined {
+export function getNodeIdentifier(node: any): string | undefined {
     if (node instanceof NodeVar){
         return Solver.prototype.getNodeHash(node.node).toString();
     }else if(node instanceof FunctionReturnVar){
