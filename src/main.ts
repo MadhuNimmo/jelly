@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
-import {analyzeFiles} from "./analysis/analyzer";
-import {closeSync, openSync, readdirSync, readFileSync, unlinkSync, writeFileSync} from "fs";
-import {program} from "commander";
-import logger, {logToFile, setLogLevel} from "./misc/logger";
+import { analyzeFiles } from "./analysis/analyzer";
+import { closeSync, openSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "fs";
+import { program } from "commander";
+import logger, { logToFile, setLogLevel } from "./misc/logger";
 import {
     COPYRIGHT,
     options,
@@ -14,14 +14,14 @@ import {
     setPatternProperties,
     VERSION
 } from "./options";
-import {spawnSync} from "child_process";
-import path, {sep} from "path";
-import {autoDetectBaseDir, expand, writeStreamedStringify} from "./misc/files";
-import {tapirPatternMatch} from "./patternmatching/tapirpatterns";
-import {toDot} from "./output/graphviz";
-import {AnalysisStateReporter} from "./output/analysisstatereporter";
-import {TypeScriptTypeInferrer} from "./typescript/typeinferrer";
-import {getAPIUsage, reportAPIUsage} from "./patternmatching/apiusage";
+import { spawnSync } from "child_process";
+import path, { sep } from "path";
+import { autoDetectBaseDir, expand, writeStreamedStringify } from "./misc/files";
+import { tapirPatternMatch } from "./patternmatching/tapirpatterns";
+import { toDot } from "./output/graphviz";
+import { AnalysisStateReporter } from "./output/analysisstatereporter";
+import { TypeScriptTypeInferrer } from "./typescript/typeinferrer";
+import { getAPIUsage, reportAPIUsage } from "./patternmatching/apiusage";
 import {
     convertTapirPatterns,
     getGlobs,
@@ -29,17 +29,17 @@ import {
     loadTapirDetectionPatternFiles,
     removeObsoletePatterns
 } from "./patternmatching/patternloader";
-import {compareCallGraphs} from "./output/compare";
-import {getMemoryLimit} from "./misc/memory";
+import { compareCallGraphs } from "./output/compare";
+import { getMemoryLimit } from "./misc/memory";
 import Solver from "./analysis/solver";
-import {exportCallGraphHtml, exportDataFlowGraphHtml} from "./output/visualizer";
-import {VulnerabilityDetector} from "./patternmatching/vulnerabilitydetector";
-import {Vulnerability} from "./typings/vulnerabilities";
-import {addAll} from "./misc/util";
-import {getAPIExported, reportAccessPaths, reportAPIExportedFunctions} from "./patternmatching/apiexported";
-import {merge} from "./output/merge";
-import {CallGraph} from "./typings/callgraph";
-import {ProcessManager} from "./approx/processmanager";
+import { exportCallGraphHtml, exportDataFlowGraphHtml } from "./output/visualizer";
+import { VulnerabilityDetector } from "./patternmatching/vulnerabilitydetector";
+import { Vulnerability } from "./typings/vulnerabilities";
+import { addAll } from "./misc/util";
+import { getAPIExported, reportAccessPaths, reportAPIExportedFunctions } from "./patternmatching/apiexported";
+import { merge } from "./output/merge";
+import { CallGraph } from "./typings/callgraph";
+import { ProcessManager } from "./approx/processmanager";
 import { getPromiseAliases } from './output/promiseOperations';
 
 type PromiseFlag = 'all' | 'noasync' | 'newpromise';
@@ -167,7 +167,7 @@ async function main() {
         // restart with node option --expose-gc if --gc is enabled
         const args = process.argv.slice(1);
         args.unshift("--expose-gc");
-        const t = spawnSync(process.execPath, args, {stdio: "inherit"});
+        const t = spawnSync(process.execPath, args, { stdio: "inherit" });
         if (t.status === null) {
             logger.error("Error: Unable to restart with --expose-gc");
             process.exitCode = -1;
@@ -201,7 +201,7 @@ async function main() {
             args = ["test", ...program.args];
             cwd = path.resolve(options.npmTest);
             // react-dom/test-utils' act method misbehaves in production environments
-            env = {NODE_ENV: "test"};
+            env = { NODE_ENV: "test" };
         } else {
             if (program.args.length === 0) {
                 logger.info("File missing, aborting");
@@ -233,7 +233,7 @@ async function main() {
 
         const dir = path.dirname(dyn);
         const cgs: Array<CallGraph> = [];
-        for (const f of readdirSync(dir, {withFileTypes: true}))
+        for (const f of readdirSync(dir, { withFileTypes: true }))
             if (f.isFile()) {
                 const p = path.resolve(dir, f.name);
                 if (p.startsWith(`${dyn}-`)) { // instrumented execution has produced $JELLY-OUT-<PID> files
@@ -411,8 +411,8 @@ async function main() {
                 if (!isValidPromiseFlag(flag)) {
                     throw new Error('Async flag must be one of: all, noasync, newpromise');
                 }
-                
-                const promiseAliases = getPromiseAliases(f, flag);
+
+                const promiseAliases = getPromiseAliases(f, flag, solver);
                 writeFileSync(file, JSON.stringify(Object.fromEntries(promiseAliases), null, 2));
                 logger.info(`Promise aliases written to ${file}`);
             }
