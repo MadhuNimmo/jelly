@@ -11,8 +11,8 @@ import { ConstraintVar, FunctionReturnVar, Node, NodeVar, ObjectPropertyVar } fr
 import { AllocationSiteToken } from "../analysis/tokens";
 import Solver from "../analysis/solver";
 import { locationToStringWithFileAndEnd } from "../misc/util";
-import { FunctionInfo, ModuleInfo } from "../analysis/infos";
 import { AnalysisStateReporter } from "./analysisstatereporter";
+import { FunctionInfo, ModuleInfo } from "../analysis/infos";
 
 /**
  * Types of Promise creation/usage that can be tracked in the analysis
@@ -242,7 +242,7 @@ export interface PromiseAnalysisResult {
     isAggregateMethodPromise: boolean;
     /** Input Promises to this aggregate Promise */
     inputPromises: PromiseInputRelationship[];
-    /** Whether this Promise is in reachable code */
+    /** If the Promise is in reachable code */
     isReachable: boolean;
     /** Information about the Promise's usage across code boundaries */
     usage: {
@@ -262,13 +262,6 @@ export interface PromiseAnalysisResult {
  * @param flag - The Promise flag indicating which types to include
  * @returns True if the node creates a Promise
  */
-/**
- * Checks if a node is a Promise creation site
- * 
- * @param node - The AST node to check
- * @param flag - The Promise flag indicating which types to include
- * @returns True if the node creates a Promise
- */
 function isPromiseCreation(node: any, flag: PromiseFlag): boolean {
     if (!node || typeof node !== 'object') {
         return false;
@@ -276,7 +269,7 @@ function isPromiseCreation(node: any, flag: PromiseFlag): boolean {
 
     try {
         // Helper function to check async functions
-        const isAsyncFunction = () => 
+        const isAsyncFunction = () =>
         ((node.type === "FunctionDeclaration" ||
             node.type === "FunctionExpression" ||
             node.type === "ArrowFunctionExpression" ||
@@ -294,42 +287,35 @@ function isPromiseCreation(node: any, flag: PromiseFlag): boolean {
 
         // Helper function to check Promise static methods and chains
         const isPromiseMethod = () => {
-            // Check for Promise static methods like Promise.all()
             if (node.type === "CallExpression" &&
-                node.callee && 
+                node.callee &&
                 node.callee.type === "MemberExpression" &&
                 node.callee.object &&
-                node.callee.object.type === "Identifier" &&
-                node.callee.object.name === "Promise" &&
-                node.callee.property &&
-                node.callee.property.type === "Identifier") {
-                
-                const methodName = node.callee.property.name;
-                
-                if (["all", "race", "allSettled", "any"].includes(methodName)) {
-                    (node as any).isPromiseStaticCall = true;
-                    return true;
+                node.callee.property) {
+
+                // Static methods
+                if (node.callee.object.type === "Identifier" &&
+                    node.callee.object.name === "Promise" &&
+                    node.callee.property.type === "Identifier") {
+
+                    const methodName = node.callee.property.name;
+
+                    if (["all", "race", "allSettled", "any"].includes(methodName)) {
+                        (node as any).isPromiseStaticCall = true;
+                        return true;
+                    }
+
+                    if (["resolve", "reject"].includes(methodName)) {
+                        return true;
+                    }
                 }
-                
-                if (["resolve", "reject"].includes(methodName)) {
-                    return true;
-                }
-            }
-            
-            // Check for ANY .then(), .catch(), or .finally() call which creates a Promise
-            if (node.type === "CallExpression" &&
-                node.callee && 
-                node.callee.type === "MemberExpression" &&
-                node.callee.property &&
-                node.callee.property.type === "Identifier") {
-                
-                const methodName = node.callee.property.name;
-                if (["then", "catch", "finally"].includes(methodName)) {
-                    // This is a Promise-creating method call regardless of the base object
+
+                // Chain methods
+                if (node.callee.property.type === "Identifier" &&
+                    ["then", "catch", "finally"].includes(node.callee.property.name)) {
                     return true;
                 }
             }
-            
             return false;
         };
 
@@ -400,16 +386,16 @@ function isApplicationCode(location: string, solver: Solver): boolean {
  * @param f - The fragment state
  * @returns Location string of the function or undefined
  */
-function findEnclosingFunction(node: any, f: FragmentState): string | undefined {
+function findEnclosingFunction(node: any, solver: Solver): [ModuleInfo | FunctionInfo | undefined, string | undefined] {
     if (!node || !node.loc) {
-        return undefined;
+        return [undefined,undefined];
     }
 
     try {
         // Use callToContainingFunction to find the enclosing function
-        const containingFunc = f.callToContainingFunction.get(node);
+        const containingFunc = solver.fragmentState.callToContainingFunction.get(node);
         if (containingFunc && containingFunc.loc) {
-            return locationToStringWithFileAndEnd(containingFunc.loc);
+            return [containingFunc,locationToStringWithFileAndEnd(containingFunc.loc)];
         }
 
         // For function nodes, return their own location
@@ -421,14 +407,14 @@ function findEnclosingFunction(node: any, f: FragmentState): string | undefined 
             node.type === "ClassPrivateMethod" ||
             node.type === "ObjectMethod"
         )) {
-            return locationToStringWithFileAndEnd(node.loc);
+            return [solver.globalState.functionInfos.get(node), locationToStringWithFileAndEnd(node.loc)];
         }
 
         // Check functional parameters
-        for (const [func, params] of f.functionParameters) {
+        for (const [func, params] of solver.fragmentState.functionParameters) {
             for (const param of params) {
                 if (param instanceof NodeVar && param.node === node && func && func.loc) {
-                    return locationToStringWithFileAndEnd(func.loc);
+                    return [solver.globalState.functionInfos.get(node),locationToStringWithFileAndEnd(func.loc)];
                 }
             }
         }
@@ -436,21 +422,7 @@ function findEnclosingFunction(node: any, f: FragmentState): string | undefined 
         console.warn("Error in findEnclosingFunction:", err);
     }
 
-    return undefined;
-}
-
-/**
- * Check if a function is reachable based on its location
- * 
- * @param functionLocation - Location string of the function
- * @param reachableFuncLocations - Set of reachable function locations
- * @returns True if the function is reachable
- */
-function isFunctionLocationReachable(
-    functionLocation: string, 
-    reachableFuncLocations: Set<string>
-): boolean {
-    return reachableFuncLocations.has(functionLocation);
+    return[undefined, undefined];
 }
 
 /**
@@ -464,46 +436,17 @@ function isFunctionLocationReachable(
 export function getPromiseAliases(
     f: FragmentState, 
     flag: PromiseFlag,
-    solver: Solver
+    solver: Solver,
+    reachableFunctions: Set<FunctionInfo | ModuleInfo>
 ): Map<string, PromiseAnalysisResult> {
     if (!f || !solver) {
         console.error("Invalid fragment state or solver provided to getPromiseAliases");
         return new Map();
     }
 
-    // Get reachable functions using AnalysisStateReporter
-    const reachableFuncLocations = new Set<string>();
-    
-    try {
-        // Create the reporter and get reachable functions and modules
-        const reporter = new AnalysisStateReporter(solver.fragmentState);
-        const allReachable = reporter.getReachableModulesAndFunctions(reporter.getEntryModules());
-        
-        // Filter to get just FunctionInfo and ModuleInfo objects
-        const reachableFunctions = Array.from(allReachable).filter(
-            (r): r is FunctionInfo | ModuleInfo => 
-                (r as any).constructor.name === 'FunctionInfo' || 
-                (r as any).constructor.name === 'ModuleInfo'
-        );
-        
-        // Convert to a set of location strings for easy lookup
-        for (const func of reachableFunctions) {
-            if ((func as any).loc) {
-                const location = locationToStringWithFileAndEnd((func as any).loc);
-                reachableFuncLocations.add(location);
-            }
-        }
-        
-        console.log(`Found ${reachableFuncLocations.size} reachable functions.`);
-    } catch (err) {
-        console.warn("Error getting reachable functions:", err);
-        console.warn("Will consider all functions as potentially reachable");
-    }
-
     // Storage for Promise analysis information
     const promiseEntries: Map<string, {
         promiseDefinitionLocation: string;
-        enclosingFunction: string | undefined;
         functionsContainingAliases: Set<string>;
         objectsContainingAliases: Set<string>;
         awaitLocations: Set<string>;
@@ -548,6 +491,19 @@ export function getPromiseAliases(
                     continue;
                 }
                 
+                // Create new Promise entry
+                promiseEntries.set(promiseId, {
+                    promiseDefinitionLocation: "",
+                    functionsContainingAliases: new Set<string>(),
+                    objectsContainingAliases: new Set<string>(),
+                    awaitLocations: new Set<string>(),
+                    isAsyncPromise: false,
+                    chainLocations: [],
+                    isAggregateMethodPromise: false,
+                    inputPromises: [],
+                    isReachable: false
+                });
+                
                 // Process tokens
                 const tokens = Array.isArray(tokensObj) ? tokensObj : [...tokensObj];
                 if (tokens.length === 0) {
@@ -558,50 +514,42 @@ export function getPromiseAliases(
                     if (token instanceof AllocationSiteToken) {
                         if (token.kind === "Promise" && token.allocSite?.loc) {
                             const defAddress = locationToStringWithFileAndEnd(token.allocSite.loc);
+                            const promiseInfo = promiseEntries.get(promiseId);
+                            if (promiseInfo) {
+                                promiseInfo.promiseDefinitionLocation = defAddress;
                             
-                            // Find enclosing function for allocation site
-                            const enclosingFunction = findEnclosingFunction(token.allocSite, f);
-                            
-                            // Check if the enclosing function is reachable
-                            const isReachable = enclosingFunction ? 
-                                isFunctionLocationReachable(enclosingFunction, reachableFuncLocations) : 
-                                false;
-                            
-                            // Skip Promises that are defined in unreachable functions
-                            if (!isReachable && reachableFuncLocations.size > 0) {
-                                continue;
-                            }
-                            
-                            // Create Promise entry
-                            promiseEntries.set(promiseId, {
-                                promiseDefinitionLocation: defAddress,
-                                enclosingFunction,
-                                functionsContainingAliases: new Set<string>(enclosingFunction ? [enclosingFunction] : []),
-                                objectsContainingAliases: new Set<string>(),
-                                awaitLocations: new Set<string>(),
-                                isAsyncPromise: false,
-                                chainLocations: [],
-                                isAggregateMethodPromise: false,
-                                inputPromises: [],
-                                isReachable
-                            });
-                            
-                            // Check for aggregate methods (Promise.all etc)
-                            if (var_ instanceof NodeVar && var_.node.type === "CallExpression" &&
-                                var_.node.callee.type === "MemberExpression") {
-                                
-                                if (var_.node.callee.object.type === "Identifier" && 
-                                    var_.node.callee.object.name === "Promise" && 
-                                    var_.node.callee.property.type === "Identifier") {
+                                // Check for aggregate methods (Promise.all etc)
+                                if (var_ instanceof NodeVar && var_.node.type === "CallExpression" &&
+                                    var_.node.callee.type === "MemberExpression") {
                                     
-                                    const methodName = var_.node.callee.property.name;
-                                    if (["all", "race", "allSettled", "any"].includes(methodName)) {
-                                        promiseEntries.get(promiseId)!.isAggregateMethodPromise = true;
+                                    if (var_.node.callee.object.type === "Identifier" && 
+                                        var_.node.callee.object.name === "Promise" && 
+                                        var_.node.callee.property.type === "Identifier") {
+                                        
+                                        const methodName = var_.node.callee.property.name;
+                                        if (["all", "race", "allSettled", "any"].includes(methodName)) {
+                                            promiseInfo.isAggregateMethodPromise = true;
+                                        }
                                     }
+                                }
+                                
+                                // Find enclosing function for allocation site
+                                const [enclosingFunction,enclosingFunctionLoc] = findEnclosingFunction(token.allocSite, solver);
+                                
+                                if (enclosingFunction && reachableFunctions.has(enclosingFunction)){
+                                    promiseInfo.isReachable = true;
+                                }
+                                if (enclosingFunctionLoc) {
+                                    promiseInfo.functionsContainingAliases.add(enclosingFunctionLoc);
                                 }
                             }
                         }
                     }
+                }
+                
+                // Delete entries without location
+                if (promiseEntries.get(promiseId)?.promiseDefinitionLocation === "") {
+                    promiseEntries.delete(promiseId);
                 }
             } catch (err) {
                 console.warn("Error processing variable:", err);
@@ -665,30 +613,24 @@ export function getPromiseAliases(
                         if (alias instanceof NodeVar && alias.node) {
                             const node = alias.node;
                             
-                            // Find enclosing function for this node
-                            const enclosingFunction = findEnclosingFunction(node, f);
-                            
-                            // Check if the enclosing function is reachable
-                            const isFuncReachable = enclosingFunction ? 
-                                isFunctionLocationReachable(enclosingFunction, reachableFuncLocations) : 
-                                false;
-                            
-                            // Only add reachable functions to containingAliases
-                            if (enclosingFunction && (isFuncReachable || reachableFuncLocations.size === 0)) {
-                                promiseInfo.functionsContainingAliases.add(enclosingFunction);
-                                
-                                // Update reachability if this function is reachable
-                                if (isFuncReachable) {
-                                    promiseInfo.isReachable = true;
-                                }
-                            }
-                            
                             // Track await expressions
                             if (node.type === "AwaitExpression") {
                                 if (node.loc) {
                                     const awaitLocation = locationToStringWithFileAndEnd(node.loc);
                                     promiseInfo.awaitLocations.add(awaitLocation);
                                 }
+                                
+                                // Find enclosing function for await expression
+                                const [_, enclosingFunctionLoc] = findEnclosingFunction(node, solver);
+                                if (enclosingFunctionLoc) {
+                                    promiseInfo.functionsContainingAliases.add(enclosingFunctionLoc);
+                                }
+                            }
+                            
+                            // For any node with a Promise alias, find its enclosing function
+                            const [_, enclosingFunctionLoc] = findEnclosingFunction(node, solver);
+                            if (enclosingFunctionLoc) {
+                                promiseInfo.functionsContainingAliases.add(enclosingFunctionLoc);
                             }
                             
                             // Track object property assignments
@@ -729,19 +671,7 @@ export function getPromiseAliases(
                             // The function itself contains an alias
                             if (alias.fun.loc) {
                                 const funLocation = locationToStringWithFileAndEnd(alias.fun.loc);
-                                
-                                // Check if the function is reachable
-                                const isFuncReachable = isFunctionLocationReachable(funLocation, reachableFuncLocations);
-                                
-                                // Only add reachable functions
-                                if (isFuncReachable || reachableFuncLocations.size === 0) {
-                                    promiseInfo.functionsContainingAliases.add(funLocation);
-                                    
-                                    // Update reachability if this function is reachable
-                                    if (isFuncReachable) {
-                                        promiseInfo.isReachable = true;
-                                    }
-                                }
+                                promiseInfo.functionsContainingAliases.add(funLocation);
                             }
                         } else if (alias instanceof ObjectPropertyVar) {
                             // Track object properties that store Promises
@@ -758,33 +688,13 @@ export function getPromiseAliases(
                     for (const param of params) {
                         if (aliases.has(param) && func?.loc) {
                             const functionLocation = locationToStringWithFileAndEnd(func.loc);
-                            
-                            // Check if the function is reachable
-                            const isFuncReachable = isFunctionLocationReachable(functionLocation, reachableFuncLocations);
-                            
-                            // Only add reachable functions
-                            if (isFuncReachable || reachableFuncLocations.size === 0) {
-                                promiseInfo.functionsContainingAliases.add(functionLocation);
-                                
-                                // Update reachability if this function is reachable
-                                if (isFuncReachable) {
-                                    promiseInfo.isReachable = true;
-                                }
-                            }
+                            promiseInfo.functionsContainingAliases.add(functionLocation);
                         }
                     }
                 }
                 
                 // Process chain relationships
                 promiseInfo.chainLocations = getPromiseChains(promiseId);
-                
-                // Update reachability based on chain handlers
-                for (const chain of promiseInfo.chainLocations) {
-                    const isHandlerReachable = isFunctionLocationReachable(chain.handlerLocation, reachableFuncLocations);
-                    if (isHandlerReachable) {
-                        promiseInfo.isReachable = true;
-                    }
-                }
                 
                 // Process input relationships for aggregate methods
                 const inputRelationships = promiseInputMap.get(promiseId) || [];
@@ -801,11 +711,6 @@ export function getPromiseAliases(
         
         for (const [promiseId, promiseInfo] of promiseEntries.entries()) {
             try {
-                // Skip unreachable promises
-                if (!promiseInfo.isReachable && reachableFuncLocations.size > 0) {
-                    continue;
-                }
-                
                 // Collect all locations where this Promise is touched
                 const allTouchLocations: string[] = [
                     ...Array.from(promiseInfo.functionsContainingAliases),
@@ -818,7 +723,6 @@ export function getPromiseAliases(
                     allTouchLocations.push(chain.handlerLocation);
                 }
                 
-                // Analyze code usage patterns
                 // Analyze code usage patterns
                 const definedInApp = isApplicationCode(promiseInfo.promiseDefinitionLocation, solver);
                 let usedExternally = false;
@@ -900,10 +804,10 @@ export function formatPromiseAnalysis(promiseId: string, analysis: PromiseAnalys
  * @returns Graph representation with nodes and edges
  */
 export function createPromiseGraph(promiseAnalysis: Map<string, PromiseAnalysisResult>): {
-    nodes: Array<{ id: string; type: string; location: string; isReachable: boolean }>;
+    nodes: Array<{ id: string; type: string; location: string }>;
     edges: Array<{ source: string; target: string; type: string }>;
 } {
-    const nodes: Array<{ id: string; type: string; location: string; isReachable: boolean }> = [];
+    const nodes: Array<{ id: string; type: string; location: string }> = [];
     const edges: Array<{ source: string; target: string; type: string }> = [];
     const nodeIds = new Set<string>();
 
@@ -920,8 +824,7 @@ export function createPromiseGraph(promiseAnalysis: Map<string, PromiseAnalysisR
             nodes.push({
                 id: promiseId,
                 type,
-                location: analysis.promiseDefinitionLocation,
-                isReachable: analysis.isReachable
+                location: analysis.promiseDefinitionLocation
             });
 
             nodeIds.add(promiseId);
@@ -943,7 +846,6 @@ export function createPromiseGraph(promiseAnalysis: Map<string, PromiseAnalysisR
                     });
                 }
             }
-
             // Add input relationships for aggregate Promises
             if (analysis.isAggregateMethodPromise) {
                 for (const input of analysis.inputPromises) {
@@ -980,8 +882,6 @@ export function analyzeModulePromisePatterns(
     chainedRatio: number;
     aggregationRatio: number;
     crossModuleBoundary: number;
-    unreachableCount: number;
-    reachableCount: number;
     mostCommonPatterns: Array<{ pattern: string; count: number }>;
 } {
     const modulePromises = [...promiseAnalysis.values()].filter(
@@ -996,31 +896,22 @@ export function analyzeModulePromisePatterns(
             chainedRatio: 0,
             aggregationRatio: 0,
             crossModuleBoundary: 0,
-            unreachableCount: 0,
-            reachableCount: 0,
             mostCommonPatterns: []
         };
     }
 
-    // Calculate counts
+    // Calculate ratios
     const asyncCount = modulePromises.filter(p => p.isAsyncPromise).length;
     const chainedCount = modulePromises.filter(p => p.chainLocations.length > 0).length;
     const aggregateCount = modulePromises.filter(p => p.isAggregateMethodPromise).length;
     const crossModuleCount = modulePromises.filter(p =>
         p.usage.usedExternally || p.usage.externalDefinitionUsedInApp
     ).length;
-    const reachableCount = modulePromises.filter(p => p.isReachable).length;
-    const unreachableCount = totalPromises - reachableCount;
 
     // Identify patterns
     const patterns = new Map<string, number>();
 
     for (const promise of modulePromises) {
-        // Skip unreachable promises for pattern analysis
-        if (!promise.isReachable) {
-            continue;
-        }
-        
         let pattern = promise.isAsyncPromise ? "async" : "explicit";
 
         if (promise.chainLocations.length > 0) {
@@ -1054,8 +945,6 @@ export function analyzeModulePromisePatterns(
         chainedRatio: chainedCount / totalPromises,
         aggregationRatio: aggregateCount / totalPromises,
         crossModuleBoundary: crossModuleCount / totalPromises,
-        unreachableCount,
-        reachableCount,
         mostCommonPatterns
     };
 }
@@ -1071,68 +960,47 @@ export function analyzeModulePromisePatterns(
 export function analyzePromises(
     fragmentState: FragmentState,
     solver: Solver,
-    options: {
-        includeAsync?: boolean;
-        includeBuiltins?: boolean;
-        outputFormat?: 'json' | 'summary' | 'graph';
-        includeUnreachable?: boolean;
-    } = {}
+    flag : PromiseFlag
 ): any {
     try {
-        const {
-            includeAsync = true,
-            includeBuiltins = true,
-            outputFormat = 'json',
-            includeUnreachable = false
-        } = options;
+        // const {
+        //     includeAsync = true,
+        //     includeBuiltins = true,
+        //     outputFormat = 'json'
+        // } = options;
 
         // Determine which Promise flag to use
         let flag: PromiseFlag = 'all';
-        if (!includeAsync) {
-            flag = includeBuiltins ? 'noasync' : 'newpromise';
-        }
+        // if (!includeAsync) {
+        //     flag = includeBuiltins ? 'noasync' : 'newpromise';
+        // }
+
+        const reporter = new AnalysisStateReporter(solver.fragmentState);    
+        const allReachable = reporter.getReachableModulesAndFunctions(reporter.getEntryModules());     // Get reachable functions     
+        const reachableFunctions = new Set(       Array.from(allReachable).filter(
+            (r): r is FunctionInfo | ModuleInfo => r instanceof FunctionInfo || r instanceof ModuleInfo)); 
 
         // Run the analysis
-        const promiseAnalysis = getPromiseAliases(fragmentState, flag, solver);
+        const promiseAnalysis = getPromiseAliases(fragmentState, flag, solver, reachableFunctions);
 
-        // If requested, filter out unreachable promises
-        let filteredAnalysis = promiseAnalysis;
-        if (!includeUnreachable) {
-            filteredAnalysis = new Map(
-                [...promiseAnalysis].filter(([_, info]) => info.isReachable)
-            );
+        // Format as a plain object
+        const result: Record<string, any> = {};
+        for (const [promiseId, analysis] of promiseAnalysis.entries()) {
+            result[promiseId] = {
+                promiseDefinitionLocation: analysis.promiseDefinitionLocation,
+                functionsContainingAliases: analysis.functionsContainingAliases,
+                functionTouchCount: analysis.functionTouchCount,
+                objectsContainingAliases: analysis.objectsContainingAliases,
+                storedInObjectOrArrayCount: analysis.storedInObjectOrArrayCount,
+                awaitLocations: analysis.awaitLocations,
+                isAsyncPromise: analysis.isAsyncPromise,
+                chainLocations: analysis.chainLocations,
+                isAggregateMethodPromise: analysis.isAggregateMethodPromise,
+                inputPromises: analysis.inputPromises,
+                usage: analysis.usage
+            };
         }
-
-        // Generate appropriate output format
-        switch (outputFormat) {
-            case 'summary':
-                return generatePromiseSummary(filteredAnalysis);
-
-            case 'graph':
-                return createPromiseGraph(filteredAnalysis);
-
-            case 'json':
-            default:
-                // Format as a plain object
-                const result: Record<string, any> = {};
-                for (const [promiseId, analysis] of filteredAnalysis.entries()) {
-                    result[promiseId] = {
-                        promiseDefinitionLocation: analysis.promiseDefinitionLocation,
-                        functionsContainingAliases: analysis.functionsContainingAliases,
-                        functionTouchCount: analysis.functionTouchCount,
-                        objectsContainingAliases: analysis.objectsContainingAliases,
-                        storedInObjectOrArrayCount: analysis.storedInObjectOrArrayCount,
-                        awaitLocations: analysis.awaitLocations,
-                        isAsyncPromise: analysis.isAsyncPromise,
-                        chainLocations: analysis.chainLocations,
-                        isAggregateMethodPromise: analysis.isAggregateMethodPromise,
-                        inputPromises: analysis.inputPromises,
-                        isReachable: analysis.isReachable,
-                        usage: analysis.usage
-                    };
-                }
-                return result;
-        }
+        return result;
     } catch (err) {
         console.error("Error in analyzePromises:", err);
         return { error: "Analysis failed", message: String(err) };
@@ -1160,8 +1028,6 @@ export function generatePromiseSummary(promiseAnalysis: Map<string, PromiseAnaly
         promiseRaceUsage: 0,
         promiseAllSettledUsage: 0,
         promiseAnyUsage: 0,
-        reachablePromises: 0,
-        unreachablePromises: 0,
         fileWithMostPromises: { file: "", count: 0 },
         filesMap: new Map<string, number>()
     };
@@ -1169,15 +1035,6 @@ export function generatePromiseSummary(promiseAnalysis: Map<string, PromiseAnaly
     const filePromiseCounts = new Map<string, number>();
 
     for (const [, promise] of promiseAnalysis) {
-        // Track reachability
-        if (promise.isReachable) {
-            summary.reachablePromises++;
-        } else {
-            summary.unreachablePromises++;
-            // Skip unreachable promises in most stats (since they're filtered out)
-            continue;
-        }
-
         // Count by type
         if (promise.isAsyncPromise) {
             summary.asyncFunctionPromises++;
@@ -1228,7 +1085,7 @@ export function generatePromiseSummary(promiseAnalysis: Map<string, PromiseAnaly
             summary.externalPromisesUsedInApp++;
         }
 
-        // Track files (only count reachable promises)
+        // Track files
         const file = getFileFromLocation(promise.promiseDefinitionLocation);
         if (file) {
             filePromiseCounts.set(
