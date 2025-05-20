@@ -40,7 +40,7 @@ import { getAPIExported, reportAccessPaths, reportAPIExportedFunctions } from ".
 import { merge } from "./output/merge";
 import { CallGraph } from "./typings/callgraph";
 import { ProcessManager } from "./approx/processmanager";
-import { getPromiseAliases } from './output/promiseOperations';
+import { analyzePromises } from './output/promiseOperations';
 
 type PromiseFlag = 'all' | 'noasync' | 'newpromise';
 
@@ -412,8 +412,8 @@ async function main() {
                     throw new Error('Async flag must be one of: all, noasync, newpromise');
                 }
 
-                const promiseAliases = getPromiseAliases(f, flag, solver);
-                writeFileSync(file, JSON.stringify(Object.fromEntries(promiseAliases), null, 2));
+                const promiseAliases = analyzePromises(f, solver, flag);
+                writeFileSync(file, JSON.stringify(promiseAliases, null, 2));
                 logger.info(`Promise aliases written to ${file}`);
             }
         }

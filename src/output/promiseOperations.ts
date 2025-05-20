@@ -10,7 +10,7 @@ import { FragmentState } from "../analysis/fragmentstate";
 import { ConstraintVar, FunctionReturnVar, Node, NodeVar, ObjectPropertyVar } from "../analysis/constraintvars";
 import { AllocationSiteToken } from "../analysis/tokens";
 import Solver from "../analysis/solver";
-import { locationToStringWithFileAndEnd } from "../misc/util";
+import { locationIn, locationToStringWithFileAndEnd } from "../misc/util";
 import { AnalysisStateReporter } from "./analysisstatereporter";
 import { FunctionInfo, ModuleInfo } from "../analysis/infos";
 
@@ -225,15 +225,15 @@ export interface PromiseAnalysisResult {
     /** Location where the Promise is defined */
     promiseDefinitionLocation: string;
     /** All functions that touch this Promise */
-    functionsContainingAliases: string[];
+    functionsContainingAliases: Set<String>;
     /** Count of functions that touch this Promise */
     functionTouchCount: number;
     /** Objects or arrays that contain this Promise */
-    objectsContainingAliases: string[];
+    objectsContainingAliases: Set<String>;
     /** Count of objects/arrays that contain this Promise */
     storedInObjectOrArrayCount: number;
     /** Locations where this Promise is awaited */
-    awaitLocations: string[];
+    awaitLocations: Set<String>;
     /** Whether this Promise comes from an async function */
     isAsyncPromise: boolean;
     /** Chain relationships for this Promise */
@@ -366,7 +366,7 @@ function getFileFromLocation(location: string): string {
  * @param solver - The analysis solver with global state
  * @returns True if the location is in application code, false if it's external
  */
-function isApplicationCode(location: string, solver: Solver): boolean {
+function isApplicationCode(location: String, solver: Solver): boolean {
     try {
         const normalizedFilePath = location.split(':')[0];
         const moduleInfo = solver.globalState.moduleInfosByPath.get(normalizedFilePath);
@@ -386,19 +386,26 @@ function isApplicationCode(location: string, solver: Solver): boolean {
  * @param f - The fragment state
  * @returns Location string of the function or undefined
  */
+/**
+ * Finds the enclosing function for a given AST node
+ * 
+ * @param node - The AST node to find the enclosing function for
+ * @param solver - The solver instance with global state
+ * @returns Tuple of [FunctionInfo/ModuleInfo, locationString] or [undefined, undefined]
+ */
 function findEnclosingFunction(node: any, solver: Solver): [ModuleInfo | FunctionInfo | undefined, string | undefined] {
     if (!node || !node.loc) {
-        return [undefined,undefined];
+        return [undefined, undefined];
     }
 
     try {
-        // Use callToContainingFunction to find the enclosing function
+        // Strategy 1: Use callToContainingFunction map (most direct approach)
         const containingFunc = solver.fragmentState.callToContainingFunction.get(node);
         if (containingFunc && containingFunc.loc) {
-            return [containingFunc,locationToStringWithFileAndEnd(containingFunc.loc)];
+            return [containingFunc, locationToStringWithFileAndEnd(containingFunc.loc)];
         }
-
-        // For function nodes, return their own location
+        
+        // Strategy 2: Check if node itself is a function
         if (node.type && (
             node.type === "FunctionDeclaration" ||
             node.type === "FunctionExpression" ||
@@ -409,12 +416,75 @@ function findEnclosingFunction(node: any, solver: Solver): [ModuleInfo | Functio
         )) {
             return [solver.globalState.functionInfos.get(node), locationToStringWithFileAndEnd(node.loc)];
         }
+        
+        // Strategy 3: Use scope information if available
+        // if (solver.fragmentState.nodeToScope) {
+        //     const scope = solver.fragmentState.nodeToScope.get(node);
+        //     if (scope && scope.functionNode && scope.functionNode.loc) {
+        //         return [
+        //             solver.globalState.functionInfos.get(scope.functionNode), 
+        //             locationToStringWithFileAndEnd(scope.functionNode.loc)
+        //         ];
+        //     }
+        // }
+        
+        // Strategy 4: Walk up the AST parent chain if available
+        let currentNode = node;
+        while (currentNode && currentNode.parent) {
+            currentNode = currentNode.parent;
+            
+            if (currentNode.type && (
+                currentNode.type === "FunctionDeclaration" ||
+                currentNode.type === "FunctionExpression" ||
+                currentNode.type === "ArrowFunctionExpression" ||
+                currentNode.type === "ClassMethod" ||
+                currentNode.type === "ClassPrivateMethod" ||
+                currentNode.type === "ObjectMethod"
+            )) {
+                return [
+                    solver.globalState.functionInfos.get(currentNode), 
+                    locationToStringWithFileAndEnd(currentNode.loc)
+                ];
+            }
+        }
 
-        // Check functional parameters
+        // Strategy 5: Use the function parameters map as a fallback
         for (const [func, params] of solver.fragmentState.functionParameters) {
             for (const param of params) {
                 if (param instanceof NodeVar && param.node === node && func && func.loc) {
-                    return [solver.globalState.functionInfos.get(node),locationToStringWithFileAndEnd(func.loc)];
+                    return [
+                        solver.globalState.functionInfos.get(func), 
+                        locationToStringWithFileAndEnd(func.loc)
+                    ];
+                }
+            }
+        }
+        
+        // Strategy 6: Look for the function containing this node's range
+        // This is a more expensive operation, so only do it as a last resort
+        if (node.loc) {
+            const nodeLoc = node.loc;
+            const nodeStart = nodeLoc.start ? (nodeLoc.start.line * 10000 + nodeLoc.start.column) : 0;
+            const nodeEnd = nodeLoc.end ? (nodeLoc.end.line * 10000 + nodeLoc.end.column) : 0;
+            
+            for (const [funcNode, funcInfo] of solver.globalState.functionInfos) {
+                if (funcNode.loc) {
+                    const funcStart = funcNode.loc.start ? (funcNode.loc.start.line * 10000 + funcNode.loc.start.column) : 0;
+                    const funcEnd = funcNode.loc.end ? (funcNode.loc.end.line * 10000 + funcNode.loc.end.column) : 0;
+                    
+                    // Check if node is inside this function's range
+                    if (nodeStart >= funcStart && nodeEnd <= funcEnd) {
+                        return [funcInfo, locationToStringWithFileAndEnd(funcNode.loc)];
+                    }
+                }
+            }
+            
+            // If all else fails, try to get the module info
+            const filePath = node.loc.source || (typeof node.loc.start === 'object' && node.loc.start.source);
+            if (filePath) {
+                const moduleInfo = solver.globalState.moduleInfosByPath.get(filePath);
+                if (moduleInfo) {
+                    return [moduleInfo, filePath];
                 }
             }
         }
@@ -422,7 +492,41 @@ function findEnclosingFunction(node: any, solver: Solver): [ModuleInfo | Functio
         console.warn("Error in findEnclosingFunction:", err);
     }
 
-    return[undefined, undefined];
+    // If all strategies fail, return undefined
+    return [undefined, undefined];
+}
+
+
+function isNodeInReachableCode(
+    node: any, 
+    solver: Solver,
+    reachableFunctions: Set<FunctionInfo | ModuleInfo>
+): boolean {
+    if (!node || !node.loc) {
+        return false;
+    }
+
+    try {
+        
+        // Strategy: Check if node is within any reachable function by location
+        const nodeLoc = node.loc;
+        for (const funcInfo of reachableFunctions) {
+            if (funcInfo instanceof FunctionInfo || funcInfo instanceof ModuleInfo) {
+                // // Check if node is within function's source range
+                if ( funcInfo instanceof FunctionInfo &&  locationIn(nodeLoc, funcInfo.loc)) {
+                    return true;
+                }
+                if ( funcInfo instanceof ModuleInfo) {
+                    return true;
+                }
+            }
+        }
+        
+    } catch (err) {
+        console.warn("Error in isNodeInReachableCode:", err);
+    }
+
+    return false;
 }
 
 /**
@@ -447,9 +551,9 @@ export function getPromiseAliases(
     // Storage for Promise analysis information
     const promiseEntries: Map<string, {
         promiseDefinitionLocation: string;
-        functionsContainingAliases: Set<string>;
-        objectsContainingAliases: Set<string>;
-        awaitLocations: Set<string>;
+        functionsContainingAliases: Set<String>;
+        objectsContainingAliases: Set<String>;
+        awaitLocations: Set<String>;
         isAsyncPromise: boolean;
         chainLocations: PromiseChainRelationship[];
         isAggregateMethodPromise: boolean;
@@ -494,9 +598,9 @@ export function getPromiseAliases(
                 // Create new Promise entry
                 promiseEntries.set(promiseId, {
                     promiseDefinitionLocation: "",
-                    functionsContainingAliases: new Set<string>(),
-                    objectsContainingAliases: new Set<string>(),
-                    awaitLocations: new Set<string>(),
+                    functionsContainingAliases: new Set<String>(),
+                    objectsContainingAliases: new Set<String>(),
+                    awaitLocations: new Set<String>(),
                     isAsyncPromise: false,
                     chainLocations: [],
                     isAggregateMethodPromise: false,
@@ -538,9 +642,9 @@ export function getPromiseAliases(
                                 
                                 if (enclosingFunction && reachableFunctions.has(enclosingFunction)){
                                     promiseInfo.isReachable = true;
-                                }
-                                if (enclosingFunctionLoc) {
-                                    promiseInfo.functionsContainingAliases.add(enclosingFunctionLoc);
+                                    if (enclosingFunctionLoc) {
+                                        promiseInfo.functionsContainingAliases.add(enclosingFunctionLoc);
+                                    }
                                 }
                             }
                         }
@@ -612,7 +716,7 @@ export function getPromiseAliases(
                         // Properly handle different types of constraint variables
                         if (alias instanceof NodeVar && alias.node) {
                             const node = alias.node;
-                            
+                            //console.log("nodevar",node)
                             // Track await expressions
                             if (node.type === "AwaitExpression") {
                                 if (node.loc) {
@@ -621,48 +725,59 @@ export function getPromiseAliases(
                                 }
                                 
                                 // Find enclosing function for await expression
-                                const [_, enclosingFunctionLoc] = findEnclosingFunction(node, solver);
-                                if (enclosingFunctionLoc) {
+                                const [enclosingFunction, enclosingFunctionLoc] = findEnclosingFunction(node, solver);
+                                if (enclosingFunction && enclosingFunctionLoc && reachableFunctions.has(enclosingFunction)) {
                                     promiseInfo.functionsContainingAliases.add(enclosingFunctionLoc);
                                 }
                             }
                             
                             // For any node with a Promise alias, find its enclosing function
-                            const [_, enclosingFunctionLoc] = findEnclosingFunction(node, solver);
-                            if (enclosingFunctionLoc) {
+                            const [enclosingFunction, enclosingFunctionLoc] = findEnclosingFunction(node, solver);
+                            if (enclosingFunction && enclosingFunctionLoc && reachableFunctions.has(enclosingFunction)) {
                                 promiseInfo.functionsContainingAliases.add(enclosingFunctionLoc);
                             }
-                            
                             // Track object property assignments
                             if (node.type === "AssignmentExpression" && node.loc) {
-                                if (node.left.type === "MemberExpression") {
+                                //console.log("here",node)
+                                // if (node.left.type === "MemberExpression") {
+                                //     console.log("gh")
                                     // This is an object property assignment (obj.prop = promise)
-                                    const objLocation = locationToStringWithFileAndEnd(node.loc);
-                                    promiseInfo.objectsContainingAliases.add(objLocation);
-                                }
+                                    if(isNodeInReachableCode(node,solver, reachableFunctions)){
+                                        console.log(node.right)
+                                        //promiseInfo.objectsContainingAliases.add(Solver.prototype.getNodeHash(node.right.obje));
+                                    }
+                                //}
                             }
                             
                             // Track array element assignments via member expression with computed property
-                            if (node.type === "MemberExpression" && node.computed && node.loc) {
+                            if (node.type === "MemberExpression" && node.loc) {
                                 // This is likely an array element assignment (arr[i] = promise)
-                                const arrLocation = locationToStringWithFileAndEnd(node.loc);
-                                promiseInfo.objectsContainingAliases.add(arrLocation);
+                                if(isNodeInReachableCode(node,solver, reachableFunctions)){
+                                    promiseInfo.objectsContainingAliases.add(Solver.prototype.getNodeHash(node.object).toString());
+                                }
+                                
                             }
                             
-                            // Track object literals with Promise properties
+                            // // Track object literals with Promise properties
                             if (node.type === "ObjectExpression" && node.properties && node.loc) {
-                                // If this is an object literal that contains our Promise
-                                const objLocation = locationToStringWithFileAndEnd(node.loc);
-                                promiseInfo.objectsContainingAliases.add(objLocation);
+                                if(isNodeInReachableCode(node,solver, reachableFunctions)){
+                                    console.log("gkj",node)
+                                    //promiseInfo.objectsContainingAliases.add(Solver.prototype.getNodeHash(node.object));
+                                }
                             }
                             
                             // Track array literals with Promise elements
                             if (node.type === "ArrayExpression" && node.elements && node.loc) {
                                 // If this is an array literal that contains our Promise
-                                const arrLocation = locationToStringWithFileAndEnd(node.loc);
-                                promiseInfo.objectsContainingAliases.add(arrLocation);
+                                // const arrLocation = locationToStringWithFileAndEnd(node.loc);
+                                // promiseInfo.objectsContainingAliases.add(arrLocation);
+                                if(isNodeInReachableCode(node,solver, reachableFunctions)){
+                                    console.log("gkjd",node)
+                                    //promiseInfo.objectsContainingAliases.add(Solver.prototype.getNodeHash(node.object));
+                                }
                             }
                         } else if (alias instanceof FunctionReturnVar && alias.fun) {
+                            //console.log("FunctionReturnVar",alias)
                             // Track async function returns
                             if (alias.fun.async) {
                                 promiseInfo.isAsyncPromise = true;
@@ -670,13 +785,21 @@ export function getPromiseAliases(
                             
                             // The function itself contains an alias
                             if (alias.fun.loc) {
-                                const funLocation = locationToStringWithFileAndEnd(alias.fun.loc);
-                                promiseInfo.functionsContainingAliases.add(funLocation);
+                                //const funLocation = locationToStringWithFileAndEnd(alias.fun.loc);
+                                const [func, funcLoc] = findEnclosingFunction(alias.fun, solver);
+                                if (func && funcLoc && reachableFunctions.has(func)){
+                                    promiseInfo.functionsContainingAliases.add(funcLoc);
+                                }
+                                
                             }
-                        } else if (alias instanceof ObjectPropertyVar) {
+                        } 
+                        else if (alias instanceof ObjectPropertyVar) {
+
                             // Track object properties that store Promises
-                            const objLocation = `obj.${alias.prop}`;
-                            promiseInfo.objectsContainingAliases.add(objLocation);
+                            if(alias.obj.hash){
+                                promiseInfo.objectsContainingAliases.add(alias.obj.hash?.toString());
+                            }
+                            
                         }
                     } catch (err) {
                         console.warn("Error processing alias:", err);
@@ -710,57 +833,55 @@ export function getPromiseAliases(
         const finalResults = new Map<string, PromiseAnalysisResult>();
         
         for (const [promiseId, promiseInfo] of promiseEntries.entries()) {
-            try {
-                // Collect all locations where this Promise is touched
-                const allTouchLocations: string[] = [
-                    ...Array.from(promiseInfo.functionsContainingAliases),
-                    ...Array.from(promiseInfo.objectsContainingAliases),
-                    ...Array.from(promiseInfo.awaitLocations)
-                ];
-                
-                // Add chain handler locations
-                for (const chain of promiseInfo.chainLocations) {
-                    allTouchLocations.push(chain.handlerLocation);
-                }
-                
-                // Analyze code usage patterns
-                const definedInApp = isApplicationCode(promiseInfo.promiseDefinitionLocation, solver);
-                let usedExternally = false;
-                let externalDefinitionUsedInApp = false;
-                
-                for (const location of allTouchLocations) {
-                    const isAppCode = isApplicationCode(location, solver);
+            if (promiseInfo.isReachable){
+                try {
+                    // Collect all locations where this Promise is touched
+                    const allTouchLocations: Set<String> = promiseInfo.functionsContainingAliases;
                     
-                    if (definedInApp && !isAppCode) {
-                        usedExternally = true;
+                    // Add chain handler locations
+                    for (const chain of promiseInfo.chainLocations) {
+                        allTouchLocations.add(chain.handlerLocation);
                     }
                     
-                    if (!definedInApp && isAppCode) {
-                        externalDefinitionUsedInApp = true;
+                    // Analyze code usage patterns
+                    const definedInApp = isApplicationCode(promiseInfo.promiseDefinitionLocation, solver);
+                    let usedExternally = false;
+                    let externalDefinitionUsedInApp = false;
+                    
+                    for (const location of allTouchLocations) {
+                        const isAppCode = isApplicationCode(location, solver);
+                        
+                        if (definedInApp && !isAppCode) {
+                            usedExternally = true;
+                        }
+                        
+                        if (!definedInApp && isAppCode) {
+                            externalDefinitionUsedInApp = true;
+                        }
                     }
+                    
+                    // Create the final result object with arrays instead of Sets
+                    finalResults.set(promiseId, {
+                        promiseDefinitionLocation: promiseInfo.promiseDefinitionLocation,
+                        functionsContainingAliases: promiseInfo.functionsContainingAliases,
+                        functionTouchCount: promiseInfo.functionsContainingAliases.size,
+                        objectsContainingAliases: promiseInfo.objectsContainingAliases,
+                        storedInObjectOrArrayCount: promiseInfo.objectsContainingAliases.size,
+                        awaitLocations: promiseInfo.awaitLocations,
+                        isAsyncPromise: promiseInfo.isAsyncPromise,
+                        chainLocations: promiseInfo.chainLocations,
+                        isAggregateMethodPromise: promiseInfo.isAggregateMethodPromise,
+                        inputPromises: promiseInfo.inputPromises,
+                        isReachable: promiseInfo.isReachable,
+                        usage: {
+                            definedInApp,
+                            usedExternally,
+                            externalDefinitionUsedInApp
+                        }
+                    });
+                } catch (err) {
+                    console.warn(`Error in final processing for Promise ${promiseId}:`, err);
                 }
-                
-                // Create the final result object with arrays instead of Sets
-                finalResults.set(promiseId, {
-                    promiseDefinitionLocation: promiseInfo.promiseDefinitionLocation,
-                    functionsContainingAliases: Array.from(promiseInfo.functionsContainingAliases),
-                    functionTouchCount: promiseInfo.functionsContainingAliases.size,
-                    objectsContainingAliases: Array.from(promiseInfo.objectsContainingAliases),
-                    storedInObjectOrArrayCount: promiseInfo.objectsContainingAliases.size,
-                    awaitLocations: Array.from(promiseInfo.awaitLocations),
-                    isAsyncPromise: promiseInfo.isAsyncPromise,
-                    chainLocations: promiseInfo.chainLocations,
-                    isAggregateMethodPromise: promiseInfo.isAggregateMethodPromise,
-                    inputPromises: promiseInfo.inputPromises,
-                    isReachable: promiseInfo.isReachable,
-                    usage: {
-                        definedInApp,
-                        usedExternally,
-                        externalDefinitionUsedInApp
-                    }
-                });
-            } catch (err) {
-                console.warn(`Error in final processing for Promise ${promiseId}:`, err);
             }
         }
         
@@ -809,7 +930,7 @@ export function createPromiseGraph(promiseAnalysis: Map<string, PromiseAnalysisR
 } {
     const nodes: Array<{ id: string; type: string; location: string }> = [];
     const edges: Array<{ source: string; target: string; type: string }> = [];
-    const nodeIds = new Set<string>();
+    const nodeIds = new Set<String>();
 
     // Add nodes
     for (const [promiseId, analysis] of promiseAnalysis.entries()) {
@@ -921,7 +1042,7 @@ export function analyzeModulePromisePatterns(
             if (chainTypes.has("finally")) pattern += "_finally";
         }
 
-        if (promise.awaitLocations.length > 0) {
+        if (promise.awaitLocations.size > 0) {
             pattern += "_await";
         }
 
@@ -988,15 +1109,16 @@ export function analyzePromises(
         for (const [promiseId, analysis] of promiseAnalysis.entries()) {
             result[promiseId] = {
                 promiseDefinitionLocation: analysis.promiseDefinitionLocation,
-                functionsContainingAliases: analysis.functionsContainingAliases,
+                functionsContainingAliases: Array.from(analysis.functionsContainingAliases),
                 functionTouchCount: analysis.functionTouchCount,
-                objectsContainingAliases: analysis.objectsContainingAliases,
+                objectsContainingAliases:Array.from(analysis.objectsContainingAliases),
                 storedInObjectOrArrayCount: analysis.storedInObjectOrArrayCount,
                 awaitLocations: analysis.awaitLocations,
                 isAsyncPromise: analysis.isAsyncPromise,
                 chainLocations: analysis.chainLocations,
                 isAggregateMethodPromise: analysis.isAggregateMethodPromise,
                 inputPromises: analysis.inputPromises,
+                isReachable: analysis.isReachable,
                 usage: analysis.usage
             };
         }
@@ -1005,106 +1127,6 @@ export function analyzePromises(
         console.error("Error in analyzePromises:", err);
         return { error: "Analysis failed", message: String(err) };
     }
-}
-
-/**
- * Analyzes and produces a summary report of Promise usage in a codebase
- * 
- * @param promiseAnalysis - Map of Promise analysis results
- * @returns Summary statistics about Promise usage
- */
-export function generatePromiseSummary(promiseAnalysis: Map<string, PromiseAnalysisResult>) {
-    const summary = {
-        totalPromises: promiseAnalysis.size,
-        asyncFunctionPromises: 0,
-        explicitPromises: 0,
-        awaitedPromises: 0,
-        chainedPromises: 0,
-        aggregatedPromises: 0,
-        promisesDefinedInApp: 0,
-        appPromisesUsedExternally: 0,
-        externalPromisesUsedInApp: 0,
-        promiseAllUsage: 0,
-        promiseRaceUsage: 0,
-        promiseAllSettledUsage: 0,
-        promiseAnyUsage: 0,
-        fileWithMostPromises: { file: "", count: 0 },
-        filesMap: new Map<string, number>()
-    };
-
-    const filePromiseCounts = new Map<string, number>();
-
-    for (const [, promise] of promiseAnalysis) {
-        // Count by type
-        if (promise.isAsyncPromise) {
-            summary.asyncFunctionPromises++;
-        } else {
-            summary.explicitPromises++;
-        }
-
-        // Usage patterns
-        if (promise.awaitLocations.length > 0) {
-            summary.awaitedPromises++;
-        }
-
-        if (promise.chainLocations.length > 0) {
-            summary.chainedPromises++;
-        }
-
-        if (promise.isAggregateMethodPromise) {
-            summary.aggregatedPromises++;
-
-            // Count by aggregate method type
-            if (promise.inputPromises.length > 0) {
-                const methodType = promise.inputPromises[0].methodType;
-                switch (methodType) {
-                    case 'all':
-                        summary.promiseAllUsage++;
-                        break;
-                    case 'race':
-                        summary.promiseRaceUsage++;
-                        break;
-                    case 'allSettled':
-                        summary.promiseAllSettledUsage++;
-                        break;
-                    case 'any':
-                        summary.promiseAnyUsage++;
-                        break;
-                }
-            }
-        }
-
-        // Code boundary statistics
-        if (promise.usage.definedInApp) {
-            summary.promisesDefinedInApp++;
-
-            if (promise.usage.usedExternally) {
-                summary.appPromisesUsedExternally++;
-            }
-        } else if (promise.usage.externalDefinitionUsedInApp) {
-            summary.externalPromisesUsedInApp++;
-        }
-
-        // Track files
-        const file = getFileFromLocation(promise.promiseDefinitionLocation);
-        if (file) {
-            filePromiseCounts.set(
-                file,
-                (filePromiseCounts.get(file) || 0) + 1
-            );
-        }
-    }
-
-    // Find file with most promises
-    for (const [file, count] of filePromiseCounts.entries()) {
-        if (count > summary.fileWithMostPromises.count) {
-            summary.fileWithMostPromises = { file, count };
-        }
-    }
-
-    summary.filesMap = filePromiseCounts;
-
-    return summary;
 }
 
 // Export additional utility functions
