@@ -7,20 +7,12 @@
  */
 
 import { FragmentState } from "../analysis/fragmentstate";
-import { ConstraintVar, FunctionReturnVar, Node, NodeVar, ObjectPropertyVar } from "../analysis/constraintvars";
+import { ConstraintVar, FunctionReturnVar, NodeVar, ObjectPropertyVar } from "../analysis/constraintvars";
 import { AllocationSiteToken } from "../analysis/tokens";
 import Solver from "../analysis/solver";
-import { locationIn, locationToStringWithFileAndEnd } from "../misc/util";
+import { locationToStringWithFileAndEnd } from "../misc/util";
 import { AnalysisStateReporter } from "./analysisstatereporter";
 import { FunctionInfo, ModuleInfo } from "../analysis/infos";
-
-/**
- * Types of Promise creation/usage that can be tracked in the analysis
- * - 'all': Track all Promise types (async functions, new Promise, Promise methods, built-in APIs)
- * - 'noasync': Only track explicit Promise creation (not async functions)
- * - 'newpromise': Only track direct Promise constructor usage
- */
-export type PromiseFlag = 'all' | 'noasync' | 'newpromise';
 
 /**
  * Type of chain method used on a Promise (.then/.catch/.finally)
@@ -140,85 +132,6 @@ export function recordPromiseInput(
 }
 
 /**
- * Set of built-in APIs that return Promises
- */
-const PROMISE_RETURNING_APIS = new Set([
-    'fetch',
-    'navigator.storage.persist',
-    'indexedDB.open',
-    'window.caches.open',
-    'window.caches.match',
-    'crypto.subtle.digest',
-    'crypto.subtle.encrypt',
-    'crypto.subtle.decrypt',
-    'navigator.clipboard.readText',
-    'navigator.clipboard.writeText',
-    'navigator.getBattery',
-    'navigator.geolocation.getCurrentPosition',
-    'navigator.mediaDevices.getUserMedia',
-    'WebSocket.close',
-    // Add more Promise-returning APIs as needed
-]);
-
-/**
- * Checks if a node represents a call to a built-in Promise-returning API
- * 
- * @param node - The AST node to check
- * @returns True if the node is a built-in Promise API call
- */
-function isBuiltInPromiseAPI(node: Node): boolean {
-    if (!node || typeof node !== 'object') {
-        return false;
-    }
-
-    try {
-        if (node.type === "CallExpression") {
-            // Check for direct API calls like fetch()
-            if (node.callee && node.callee.type === "Identifier") {
-                return PROMISE_RETURNING_APIS.has(node.callee.name);
-            }
-
-            // Check for member expressions like navigator.storage.persist()
-            if (node.callee && node.callee.type === "MemberExpression") {
-                const fullPath = getFullMemberExpressionPath(node.callee);
-                return PROMISE_RETURNING_APIS.has(fullPath);
-            }
-        }
-    } catch (err) {
-        console.warn("Error in isBuiltInPromiseAPI:", err);
-    }
-
-    return false;
-}
-
-/**
- * Gets the full path of a member expression (e.g., "navigator.storage.persist")
- * 
- * @param node - The member expression node
- * @returns The full dot-notation path as a string
- */
-function getFullMemberExpressionPath(node: any): string {
-    if (!node) return "";
-
-    try {
-        if (node.type === "Identifier") {
-            return node.name;
-        }
-
-        if (node.type === "MemberExpression") {
-            const objectPath = getFullMemberExpressionPath(node.object);
-            const propertyName = node.property.type === "Identifier" ? node.property.name : "";
-            return objectPath ? `${objectPath}.${propertyName}` : propertyName;
-        }
-    } catch (err) {
-        console.warn("Error in getFullMemberExpressionPath:", err);
-        return "";
-    }
-
-    return "";
-}
-
-/**
  * Interface for Promise analysis results
  */
 export interface PromiseAnalysisResult {
@@ -262,7 +175,7 @@ export interface PromiseAnalysisResult {
  * @param flag - The Promise flag indicating which types to include
  * @returns True if the node creates a Promise
  */
-function isPromiseCreation(node: any, flag: PromiseFlag): boolean {
+function isPromiseCreation(node: any): boolean {
     if (!node || typeof node !== 'object') {
         return false;
     }
@@ -319,24 +232,9 @@ function isPromiseCreation(node: any, flag: PromiseFlag): boolean {
             return false;
         };
 
-        switch (flag) {
-            case 'all':
-                return isAsyncFunction() ||
-                    isNewPromise() ||
-                    isPromiseMethod() ||
-                    isBuiltInPromiseAPI(node);
-
-            case 'noasync':
-                return isNewPromise() ||
-                    isPromiseMethod() ||
-                    isBuiltInPromiseAPI(node);
-
-            case 'newpromise':
-                return isNewPromise();
-
-            default:
-                return false;
-        }
+        return isAsyncFunction() ||
+            isNewPromise() ||
+            isPromiseMethod();
     } catch (err) {
         console.warn("Error in isPromiseCreation:", err);
         return false;
@@ -404,7 +302,7 @@ function findEnclosingFunction(node: any, solver: Solver): [ModuleInfo | Functio
         if (containingFunc && containingFunc.loc) {
             return [containingFunc, locationToStringWithFileAndEnd(containingFunc.loc)];
         }
-        
+
         // Strategy 2: Check if node itself is a function
         if (node.type && (
             node.type === "FunctionDeclaration" ||
@@ -416,23 +314,12 @@ function findEnclosingFunction(node: any, solver: Solver): [ModuleInfo | Functio
         )) {
             return [solver.globalState.functionInfos.get(node), locationToStringWithFileAndEnd(node.loc)];
         }
-        
-        // Strategy 3: Use scope information if available
-        // if (solver.fragmentState.nodeToScope) {
-        //     const scope = solver.fragmentState.nodeToScope.get(node);
-        //     if (scope && scope.functionNode && scope.functionNode.loc) {
-        //         return [
-        //             solver.globalState.functionInfos.get(scope.functionNode), 
-        //             locationToStringWithFileAndEnd(scope.functionNode.loc)
-        //         ];
-        //     }
-        // }
-        
+
         // Strategy 4: Walk up the AST parent chain if available
         let currentNode = node;
         while (currentNode && currentNode.parent) {
             currentNode = currentNode.parent;
-            
+
             if (currentNode.type && (
                 currentNode.type === "FunctionDeclaration" ||
                 currentNode.type === "FunctionExpression" ||
@@ -442,7 +329,7 @@ function findEnclosingFunction(node: any, solver: Solver): [ModuleInfo | Functio
                 currentNode.type === "ObjectMethod"
             )) {
                 return [
-                    solver.globalState.functionInfos.get(currentNode), 
+                    solver.globalState.functionInfos.get(currentNode),
                     locationToStringWithFileAndEnd(currentNode.loc)
                 ];
             }
@@ -453,32 +340,32 @@ function findEnclosingFunction(node: any, solver: Solver): [ModuleInfo | Functio
             for (const param of params) {
                 if (param instanceof NodeVar && param.node === node && func && func.loc) {
                     return [
-                        solver.globalState.functionInfos.get(func), 
+                        solver.globalState.functionInfos.get(func),
                         locationToStringWithFileAndEnd(func.loc)
                     ];
                 }
             }
         }
-        
+
         // Strategy 6: Look for the function containing this node's range
         // This is a more expensive operation, so only do it as a last resort
         if (node.loc) {
             const nodeLoc = node.loc;
             const nodeStart = nodeLoc.start ? (nodeLoc.start.line * 10000 + nodeLoc.start.column) : 0;
             const nodeEnd = nodeLoc.end ? (nodeLoc.end.line * 10000 + nodeLoc.end.column) : 0;
-            
+
             for (const [funcNode, funcInfo] of solver.globalState.functionInfos) {
                 if (funcNode.loc) {
                     const funcStart = funcNode.loc.start ? (funcNode.loc.start.line * 10000 + funcNode.loc.start.column) : 0;
                     const funcEnd = funcNode.loc.end ? (funcNode.loc.end.line * 10000 + funcNode.loc.end.column) : 0;
-                    
+
                     // Check if node is inside this function's range
                     if (nodeStart >= funcStart && nodeEnd <= funcEnd) {
                         return [funcInfo, locationToStringWithFileAndEnd(funcNode.loc)];
                     }
                 }
             }
-            
+
             // If all else fails, try to get the module info
             const filePath = node.loc.source || (typeof node.loc.start === 'object' && node.loc.start.source);
             if (filePath) {
@@ -496,39 +383,6 @@ function findEnclosingFunction(node: any, solver: Solver): [ModuleInfo | Functio
     return [undefined, undefined];
 }
 
-
-function isNodeInReachableCode(
-    node: any, 
-    solver: Solver,
-    reachableFunctions: Set<FunctionInfo | ModuleInfo>
-): boolean {
-    if (!node || !node.loc) {
-        return false;
-    }
-
-    try {
-        
-        // Strategy: Check if node is within any reachable function by location
-        const nodeLoc = node.loc;
-        for (const funcInfo of reachableFunctions) {
-            if (funcInfo instanceof FunctionInfo || funcInfo instanceof ModuleInfo) {
-                // // Check if node is within function's source range
-                if ( funcInfo instanceof FunctionInfo &&  locationIn(nodeLoc, funcInfo.loc)) {
-                    return true;
-                }
-                if ( funcInfo instanceof ModuleInfo) {
-                    return true;
-                }
-            }
-        }
-        
-    } catch (err) {
-        console.warn("Error in isNodeInReachableCode:", err);
-    }
-
-    return false;
-}
-
 /**
  * Analyzes Promise usage in a code fragment
  * 
@@ -538,8 +392,7 @@ function isNodeInReachableCode(
  * @returns Map of Promise identifiers to their analysis results
  */
 export function getPromiseAliases(
-    f: FragmentState, 
-    flag: PromiseFlag,
+    f: FragmentState,
     solver: Solver,
     reachableFunctions: Set<FunctionInfo | ModuleInfo>
 ): Map<string, PromiseAnalysisResult> {
@@ -567,17 +420,17 @@ export function getPromiseAliases(
             try {
                 // Skip if not a Promise creation site
                 let isPromise = false;
-                
+
                 if (var_ instanceof NodeVar && var_.node) {
-                    isPromise = isPromiseCreation(var_.node, flag);
+                    isPromise = isPromiseCreation(var_.node);
                 } else if (var_ instanceof FunctionReturnVar && var_.fun) {
-                    isPromise = isPromiseCreation(var_.fun, flag);
+                    isPromise = isPromiseCreation(var_.fun);
                 }
-                
+
                 if (!isPromise) {
                     continue;
                 }
-                
+
                 // Get Promise identifier
                 let promiseId: string | undefined;
                 if (var_ instanceof NodeVar && var_.node) {
@@ -585,16 +438,16 @@ export function getPromiseAliases(
                 } else if (var_ instanceof FunctionReturnVar && var_.fun) {
                     promiseId = Solver.prototype.getNodeHash(var_.fun).toString();
                 }
-                
+
                 if (!promiseId) {
                     continue;
                 }
-                
+
                 // Skip if already processed
                 if (promiseEntries.has(promiseId)) {
                     continue;
                 }
-                
+
                 // Create new Promise entry
                 promiseEntries.set(promiseId, {
                     promiseDefinitionLocation: "",
@@ -607,13 +460,13 @@ export function getPromiseAliases(
                     inputPromises: [],
                     isReachable: false
                 });
-                
+
                 // Process tokens
                 const tokens = Array.isArray(tokensObj) ? tokensObj : [...tokensObj];
                 if (tokens.length === 0) {
                     continue;
                 }
-                
+
                 for (const token of tokens) {
                     if (token instanceof AllocationSiteToken) {
                         if (token.kind === "Promise" && token.allocSite?.loc) {
@@ -621,26 +474,26 @@ export function getPromiseAliases(
                             const promiseInfo = promiseEntries.get(promiseId);
                             if (promiseInfo) {
                                 promiseInfo.promiseDefinitionLocation = defAddress;
-                            
+
                                 // Check for aggregate methods (Promise.all etc)
                                 if (var_ instanceof NodeVar && var_.node.type === "CallExpression" &&
                                     var_.node.callee.type === "MemberExpression") {
-                                    
-                                    if (var_.node.callee.object.type === "Identifier" && 
-                                        var_.node.callee.object.name === "Promise" && 
+
+                                    if (var_.node.callee.object.type === "Identifier" &&
+                                        var_.node.callee.object.name === "Promise" &&
                                         var_.node.callee.property.type === "Identifier") {
-                                        
+
                                         const methodName = var_.node.callee.property.name;
                                         if (["all", "race", "allSettled", "any"].includes(methodName)) {
                                             promiseInfo.isAggregateMethodPromise = true;
                                         }
                                     }
                                 }
-                                
+
                                 // Find enclosing function for allocation site
-                                const [enclosingFunction,enclosingFunctionLoc] = findEnclosingFunction(token.allocSite, solver);
-                                
-                                if (enclosingFunction && reachableFunctions.has(enclosingFunction)){
+                                const [enclosingFunction, enclosingFunctionLoc] = findEnclosingFunction(token.allocSite, solver);
+
+                                if (enclosingFunction && reachableFunctions.has(enclosingFunction)) {
                                     promiseInfo.isReachable = true;
                                     if (enclosingFunctionLoc) {
                                         promiseInfo.functionsContainingAliases.add(enclosingFunctionLoc);
@@ -650,7 +503,7 @@ export function getPromiseAliases(
                         }
                     }
                 }
-                
+
                 // Delete entries without location
                 if (promiseEntries.get(promiseId)?.promiseDefinitionLocation === "") {
                     promiseEntries.delete(promiseId);
@@ -659,13 +512,13 @@ export function getPromiseAliases(
                 console.warn("Error processing variable:", err);
             }
         }
-        
+
         // Second pass: track aliases and gather additional information
         for (const [promiseId, promiseInfo] of promiseEntries.entries()) {
             try {
                 // Find the variable for this Promise
                 let promiseVar: ConstraintVar | undefined;
-                
+
                 for (const [var_, _] of f.getAllVarsAndTokens()) {
                     let currentId: string | undefined;
                     if (var_ instanceof NodeVar && var_.node) {
@@ -673,28 +526,28 @@ export function getPromiseAliases(
                     } else if (var_ instanceof FunctionReturnVar && var_.fun) {
                         currentId = Solver.prototype.getNodeHash(var_.fun).toString();
                     }
-                    
+
                     if (currentId === promiseId) {
                         promiseVar = var_;
                         break;
                     }
                 }
-                
+
                 if (!promiseVar) {
                     continue;
                 }
-                
+
                 // Track all aliases of this Promise using constraint variable propagation
                 const aliases = new Set<ConstraintVar>();
                 const queue: ConstraintVar[] = [promiseVar];
-                
+
                 while (queue.length > 0) {
                     const v = queue.pop();
                     if (!v) continue;
-                    
+
                     if (v instanceof ConstraintVar) {
                         aliases.add(v);
-                        
+
                         // Add variables that this constraint variable flows to
                         const rep = f.getRepresentative(v);
                         if (rep) {
@@ -709,103 +562,48 @@ export function getPromiseAliases(
                         }
                     }
                 }
-                
+
+                // Process all aliases to gather information
                 // Process all aliases to gather information
                 for (const alias of aliases) {
                     try {
                         // Properly handle different types of constraint variables
                         if (alias instanceof NodeVar && alias.node) {
                             const node = alias.node;
-                            //console.log("nodevar",node)
+
                             // Track await expressions
                             if (node.type === "AwaitExpression") {
                                 if (node.loc) {
                                     const awaitLocation = locationToStringWithFileAndEnd(node.loc);
                                     promiseInfo.awaitLocations.add(awaitLocation);
                                 }
-                                
-                                // Find enclosing function for await expression
-                                const [enclosingFunction, enclosingFunctionLoc] = findEnclosingFunction(node, solver);
-                                if (enclosingFunction && enclosingFunctionLoc && reachableFunctions.has(enclosingFunction)) {
-                                    promiseInfo.functionsContainingAliases.add(enclosingFunctionLoc);
-                                }
                             }
-                            
+
                             // For any node with a Promise alias, find its enclosing function
                             const [enclosingFunction, enclosingFunctionLoc] = findEnclosingFunction(node, solver);
                             if (enclosingFunction && enclosingFunctionLoc && reachableFunctions.has(enclosingFunction)) {
                                 promiseInfo.functionsContainingAliases.add(enclosingFunctionLoc);
                             }
-                            // Track object property assignments
-                            if (node.type === "AssignmentExpression" && node.loc) {
-                                //console.log("here",node)
-                                // if (node.left.type === "MemberExpression") {
-                                //     console.log("gh")
-                                    // This is an object property assignment (obj.prop = promise)
-                                    if(isNodeInReachableCode(node,solver, reachableFunctions)){
-                                        console.log(node.right)
-                                        //promiseInfo.objectsContainingAliases.add(Solver.prototype.getNodeHash(node.right.obje));
-                                    }
-                                //}
-                            }
-                            
-                            // Track array element assignments via member expression with computed property
-                            if (node.type === "MemberExpression" && node.loc) {
-                                // This is likely an array element assignment (arr[i] = promise)
-                                if(isNodeInReachableCode(node,solver, reachableFunctions)){
-                                    promiseInfo.objectsContainingAliases.add(Solver.prototype.getNodeHash(node.object).toString());
-                                }
-                                
-                            }
-                            
-                            // // Track object literals with Promise properties
-                            if (node.type === "ObjectExpression" && node.properties && node.loc) {
-                                if(isNodeInReachableCode(node,solver, reachableFunctions)){
-                                    console.log("gkj",node)
-                                    //promiseInfo.objectsContainingAliases.add(Solver.prototype.getNodeHash(node.object));
-                                }
-                            }
-                            
-                            // Track array literals with Promise elements
-                            if (node.type === "ArrayExpression" && node.elements && node.loc) {
-                                // If this is an array literal that contains our Promise
-                                // const arrLocation = locationToStringWithFileAndEnd(node.loc);
-                                // promiseInfo.objectsContainingAliases.add(arrLocation);
-                                if(isNodeInReachableCode(node,solver, reachableFunctions)){
-                                    console.log("gkjd",node)
-                                    //promiseInfo.objectsContainingAliases.add(Solver.prototype.getNodeHash(node.object));
-                                }
-                            }
+
                         } else if (alias instanceof FunctionReturnVar && alias.fun) {
-                            //console.log("FunctionReturnVar",alias)
                             // Track async function returns
                             if (alias.fun.async) {
                                 promiseInfo.isAsyncPromise = true;
                             }
-                            
-                            // The function itself contains an alias
-                            if (alias.fun.loc) {
-                                //const funLocation = locationToStringWithFileAndEnd(alias.fun.loc);
-                                const [func, funcLoc] = findEnclosingFunction(alias.fun, solver);
-                                if (func && funcLoc && reachableFunctions.has(func)){
-                                    promiseInfo.functionsContainingAliases.add(funcLoc);
-                                }
-                                
-                            }
-                        } 
+                        }
                         else if (alias instanceof ObjectPropertyVar) {
-
-                            // Track object properties that store Promises
-                            if(alias.obj.hash){
-                                promiseInfo.objectsContainingAliases.add(alias.obj.hash?.toString());
+                            // Track object properties that store Promises directly
+                            if ('allocSite' in alias.obj) {
+                                const objLoc = locationToStringWithFileAndEnd(alias.obj.allocSite.loc);
+                                promiseInfo.objectsContainingAliases.add(objLoc);
                             }
-                            
+
                         }
                     } catch (err) {
                         console.warn("Error processing alias:", err);
                     }
                 }
-                
+
                 // Track Promise parameters passed to functions
                 for (const [func, params] of f.functionParameters) {
                     for (const param of params) {
@@ -815,10 +613,10 @@ export function getPromiseAliases(
                         }
                     }
                 }
-                
+
                 // Process chain relationships
                 promiseInfo.chainLocations = getPromiseChains(promiseId);
-                
+
                 // Process input relationships for aggregate methods
                 const inputRelationships = promiseInputMap.get(promiseId) || [];
                 if (promiseInfo.isAggregateMethodPromise) {
@@ -828,38 +626,38 @@ export function getPromiseAliases(
                 console.warn(`Error processing Promise ${promiseId}:`, err);
             }
         }
-        
+
         // Final pass: create results with proper typing
         const finalResults = new Map<string, PromiseAnalysisResult>();
-        
+
         for (const [promiseId, promiseInfo] of promiseEntries.entries()) {
-            if (promiseInfo.isReachable){
+            if (promiseInfo.isReachable) {
                 try {
                     // Collect all locations where this Promise is touched
-                    const allTouchLocations: Set<String> = promiseInfo.functionsContainingAliases;
-                    
+                    const allTouchLocations: Set<String> = new Set(promiseInfo.functionsContainingAliases);
+
                     // Add chain handler locations
                     for (const chain of promiseInfo.chainLocations) {
                         allTouchLocations.add(chain.handlerLocation);
                     }
-                    
+
                     // Analyze code usage patterns
                     const definedInApp = isApplicationCode(promiseInfo.promiseDefinitionLocation, solver);
                     let usedExternally = false;
                     let externalDefinitionUsedInApp = false;
-                    
+
                     for (const location of allTouchLocations) {
                         const isAppCode = isApplicationCode(location, solver);
-                        
+
                         if (definedInApp && !isAppCode) {
                             usedExternally = true;
                         }
-                        
+
                         if (!definedInApp && isAppCode) {
                             externalDefinitionUsedInApp = true;
                         }
                     }
-                    
+
                     // Create the final result object with arrays instead of Sets
                     finalResults.set(promiseId, {
                         promiseDefinitionLocation: promiseInfo.promiseDefinitionLocation,
@@ -884,7 +682,7 @@ export function getPromiseAliases(
                 }
             }
         }
-        
+
         return finalResults;
     } catch (err) {
         console.error("Error in getPromiseAliases:", err);
@@ -1081,28 +879,16 @@ export function analyzeModulePromisePatterns(
 export function analyzePromises(
     fragmentState: FragmentState,
     solver: Solver,
-    flag : PromiseFlag
 ): any {
     try {
-        // const {
-        //     includeAsync = true,
-        //     includeBuiltins = true,
-        //     outputFormat = 'json'
-        // } = options;
 
-        // Determine which Promise flag to use
-        let flag: PromiseFlag = 'all';
-        // if (!includeAsync) {
-        //     flag = includeBuiltins ? 'noasync' : 'newpromise';
-        // }
-
-        const reporter = new AnalysisStateReporter(solver.fragmentState);    
+        const reporter = new AnalysisStateReporter(solver.fragmentState);
         const allReachable = reporter.getReachableModulesAndFunctions(reporter.getEntryModules());     // Get reachable functions     
-        const reachableFunctions = new Set(       Array.from(allReachable).filter(
-            (r): r is FunctionInfo | ModuleInfo => r instanceof FunctionInfo || r instanceof ModuleInfo)); 
+        const reachableFunctions = new Set(Array.from(allReachable).filter(
+            (r): r is FunctionInfo | ModuleInfo => r instanceof FunctionInfo || r instanceof ModuleInfo));
 
         // Run the analysis
-        const promiseAnalysis = getPromiseAliases(fragmentState, flag, solver, reachableFunctions);
+        const promiseAnalysis = getPromiseAliases(fragmentState, solver, reachableFunctions);
 
         // Format as a plain object
         const result: Record<string, any> = {};
@@ -1111,7 +897,7 @@ export function analyzePromises(
                 promiseDefinitionLocation: analysis.promiseDefinitionLocation,
                 functionsContainingAliases: Array.from(analysis.functionsContainingAliases),
                 functionTouchCount: analysis.functionTouchCount,
-                objectsContainingAliases:Array.from(analysis.objectsContainingAliases),
+                objectsContainingAliases: Array.from(analysis.objectsContainingAliases),
                 storedInObjectOrArrayCount: analysis.storedInObjectOrArrayCount,
                 awaitLocations: analysis.awaitLocations,
                 isAsyncPromise: analysis.isAsyncPromise,

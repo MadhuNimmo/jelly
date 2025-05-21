@@ -42,8 +42,6 @@ import { CallGraph } from "./typings/callgraph";
 import { ProcessManager } from "./approx/processmanager";
 import { analyzePromises } from './output/promiseOperations';
 
-type PromiseFlag = 'all' | 'noasync' | 'newpromise';
-
 program
     .name("jelly")
     .version(VERSION)
@@ -119,7 +117,7 @@ program
     .option("--obj-spread", "enable model of spread syntax for object literals ({...obj})")
     .option("--native-overwrites", "allow overwriting of native object properties")
     .option("--ignore-imprecise-native-calls", "ignore imprecise native calls")
-    .option("--async <file:flag>", "capture async behavior (format: file:flag)")
+    .option("--async <file>", "capture async behavior (format: file)")
     .usage("[options] [files]")
     .addHelpText("after",
         "\nAll modules reachable by require/import from the given files are included in the analysis\n" +
@@ -401,18 +399,8 @@ async function main() {
                 out.reportVariableKinds();
 
             if (options.async) {
-
-                function isValidPromiseFlag(flag: string): flag is PromiseFlag {
-                    return ['all', 'noasync', 'newpromise'].includes(flag);
-                }
-
-                const [file, flag] = options.async.split(':');
-
-                if (!isValidPromiseFlag(flag)) {
-                    throw new Error('Async flag must be one of: all, noasync, newpromise');
-                }
-
-                const promiseAliases = analyzePromises(f, solver, flag);
+                const file = options.async;
+                const promiseAliases = analyzePromises(f, solver);
                 writeFileSync(file, JSON.stringify(promiseAliases, null, 2));
                 logger.info(`Promise aliases written to ${file}`);
             }
